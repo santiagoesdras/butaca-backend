@@ -1,0 +1,33 @@
+name: Validate PR source for main
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  validate-main-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject PR from branches other than dev
+        if: github.head_ref != 'dev'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          MESSAGE='PR rechazado automáticamente: la rama de origen debe ser dev para integrar cambios en main. Cierre este PR y cree uno nuevo desde dev.'
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body "$MESSAGE"
+          gh pr close "$PR_NUMBER" --repo "$REPO"
+          echo "::error::Only pull requests from dev can be merged into main."
+          exit 1
+
+      - name: Validate source branch
+        if: github.head_ref == 'dev'
+        run: 'echo "Valid source branch: dev"'
