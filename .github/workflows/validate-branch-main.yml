@@ -41,4 +41,4 @@ jobs:
 
       - name: Validate source branch
         if: github.head_ref == 'dev'
-        run: echo "Valid source branch: dev"
+        run: 'echo "Valid source branch: dev"'
