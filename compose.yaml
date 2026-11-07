@@ -1,0 +1,47 @@
+x-runtime: &runtime
+  restart: unless-stopped
+  init: true
+  mem_limit: 192m
+  pids_limit: 64
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "2"
+
+services:
+  api-gateway:
+    <<: *runtime
+    build:
+      context: .
+      args: { SERVICE: api-gateway }
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      MEDIA_ORIGIN: http://media-service:3001
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+    depends_on:
+      media-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      start_interval: 2s
+      start_period: 10s
+      timeout: 5s
+
+  media-service:
+    <<: *runtime
+    build:
+      context: .
+      args: { SERVICE: media-service }
+    environment:
+      TMDB_READ_ACCESS_TOKEN: ${TMDB_READ_ACCESS_TOKEN:?Define TMDB_READ_ACCESS_TOKEN en .env}
+      CACHE_TTL_MS: ${CACHE_TTL_MS:-300000}
+      CACHE_MAX_ENTRIES: ${CACHE_MAX_ENTRIES:-64}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      start_interval: 2s
+      start_period: 10s
+      timeout: 5s

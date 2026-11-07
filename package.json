@@ -1,0 +1,22 @@
+{
+  "name": "butaca-backend",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "api-gateway",
+    "media-service"
+  ],
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9"
+  }
+}
