@@ -38,14 +38,20 @@ export function finish(app: Express) {
   return app;
 }
 
+// Conserva el mensaje `error` de los servicios internos; los formatos de terceros se ocultan.
+async function errorMessage(response: Response) {
+  const body: unknown = await response.json().catch(() => null);
+  const message = typeof body === 'object' && body !== null && 'error' in body ? body.error : undefined;
+  return typeof message === 'string' && message.length > 0 && message.length <= 200 ? message : 'Error del proveedor';
+}
+
 export async function upstream(url: URL, timeout: number, headers?: HeadersInit) {
   const signal = AbortSignal.timeout(timeout);
   try {
     const response = await fetch(url, { signal, headers, redirect: 'error' });
     if (!response.ok) {
-      await response.body?.cancel();
       const retry = response.headers.get('retry-after') ?? '';
-      throw new HttpFailure(response.status, 'Error del proveedor', /^\d{1,9}$/.test(retry) ? retry : undefined);
+      throw new HttpFailure(response.status, await errorMessage(response), /^\d{1,9}$/.test(retry) ? retry : undefined);
     }
     const data: unknown = await response.json();
     return data;

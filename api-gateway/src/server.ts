@@ -1,9 +1,10 @@
 import cors from 'cors';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
+import type { Request } from 'express';
 import { finish, HttpFailure, service, upstream } from '../../shared/http.js';
 
-const path = '/api/v1/media/trending';
+const media = '/api/v1/media';
 
 export function gateway(mediaOrigin: string, frontendOrigin: string) {
   const app = service('api-gateway');
@@ -13,18 +14,22 @@ export function gateway(mediaOrigin: string, frontendOrigin: string) {
     windowMs: 60000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false,
     message: { error: 'Demasiadas solicitudes' }
   }));
-  app.get(path, async (req, res) => {
-    const target = new URL(path, mediaOrigin);
-    target.search = new URL(req.originalUrl, 'http://gateway').search;
-    try {
-      res.json(await upstream(target, 7000));
-    } catch (error) {
-      if (error instanceof HttpFailure && error.status === 400) throw new HttpFailure(400, 'Parámetros de tendencias inválidos');
-      if (error instanceof HttpFailure && error.status === 429) throw new HttpFailure(429, 'Demasiadas solicitudes', error.retryAfter);
-      if (error instanceof HttpFailure && error.status === 504) throw error;
-      throw new HttpFailure(502, 'Media Service no disponible');
-    }
-  });
+
+  // Reenvía la consulta a Media Service conservando la query string y los errores del cliente.
+  const forward = (route: string, target: (req: Request) => string = () => route) =>
+    app.get(route, async (req, res) => {
+      const url = new URL(target(req), mediaOrigin);
+      url.search = new URL(req.originalUrl, 'http://gateway').search;
+      try {
+        res.json(await upstream(url, 7000));
+      } catch (error) {
+        if (error instanceof HttpFailure && [400, 404, 429, 504].includes(error.status)) throw error;
+        throw new HttpFailure(502, 'Media Service no disponible');
+      }
+    });
+
+  forward(media + '/trending');
+  forward(media + '/search');
   return finish(app);
 }
 

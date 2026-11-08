@@ -1,18 +1,43 @@
-import { finish, HttpFailure, positiveInt, service } from '../../shared/http.js';
-import { trending } from './tmdb.js';
+import { finish, positiveInt, service } from '../../shared/http.js';
+import { choice, language, only, page, searchText, type MediaType } from './params.js';
+import { cached, client, paged } from './tmdb.js';
+
+const base = '/api/v1/media';
 
 export function media(token: string, origin = 'https://api.themoviedb.org', timeout = 4500) {
   if (!token.trim()) throw new Error('Se requiere TMDB_READ_ACCESS_TOKEN');
-  const getTrending = trending(token, origin, positiveInt('CACHE_TTL_MS', 300000), positiveInt('CACHE_MAX_ENTRIES', 64), timeout);
-  const app = service('media-service');
-  app.get('/api/v1/media/trending', async (req, res) => {
-    const language = req.query.language ?? 'es-MX';
-    if (Object.keys(req.query).some(key => key !== 'language') ||
-        typeof language !== 'string' || !/^[a-z]{2}-[A-Z]{2}$/.test(language)) {
-      throw new HttpFailure(400, 'Se admite únicamente language con formato es-MX');
-    }
-    res.json(await getTrending(language));
+  const ttl = positiveInt('CACHE_TTL_MS', 300000);
+  const max = positiveInt('CACHE_MAX_ENTRIES', 64);
+  const tmdb = client(token, origin, timeout);
+
+  const trending = cached(ttl, max, async (lang: string) => {
+    const { page, results } = paged(await tmdb('/trending/all/day', { language: lang }));
+    return { page, results };
   });
+
+  const search = cached(ttl, max, async (q: { query: string; type: MediaType | 'all'; page: number; language: string }) => {
+    const path = q.type === 'all' ? '/search/multi' : '/search/' + q.type;
+    const raw = await tmdb(path, { query: q.query, page: q.page, language: q.language, include_adult: false });
+    return paged(raw, q.type === 'all' ? undefined : q.type);
+  });
+
+  const app = service('media-service');
+
+  app.get(base + '/trending', async (req, res) => {
+    only(req.query, ['language']);
+    res.json(await trending(language(req.query)));
+  });
+
+  app.get(base + '/search', async (req, res) => {
+    only(req.query, ['query', 'media_type', 'page', 'language']);
+    res.json(await search({
+      query: searchText(req.query),
+      type: choice(req.query, 'media_type', ['all', 'movie', 'tv'], 'all'),
+      page: page(req.query),
+      language: language(req.query)
+    }));
+  });
+
   return finish(app);
 }
 
