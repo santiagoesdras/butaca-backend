@@ -36,6 +36,7 @@ export function gateway(mediaOrigin: string, frontendOrigin: string) {
 
   forward(media + '/trending');
   forward(media + '/search');
+  forward(media + '/genres');
   forward(media + '/:media_type/:id', req => `${media}/${segment(req.params.media_type)}/${segment(req.params.id)}`);
   return finish(app);
 }

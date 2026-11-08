@@ -61,6 +61,11 @@ function genres(value: unknown) {
     ? [{ id: genre.id, name: genre.name }] : []);
 }
 
+export function genreList(raw: unknown) {
+  if (!record(raw) || !Array.isArray(raw.genres)) throw invalid();
+  return { genres: genres(raw.genres) };
+}
+
 /** Normaliza el detalle de una película o serie; los campos de temporadas solo aplican a series. */
 export function details(raw: unknown, type: MediaType, id: number) {
   if (!record(raw) || raw.id !== id) throw invalid();

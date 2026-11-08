@@ -75,6 +75,26 @@ GET /api/v1/media/search?query=dune&media_type=all&page=1&language=es-MX
 
 Responde un listado paginado. Con `media_type=all` se excluyen las personas, por lo que una página puede tener menos de 20 elementos y `total_results` también cuenta las personas que encontró TMDB. Se omite contenido para adultos.
 
+### `GET /genres`
+
+Catálogo de géneros con nombres en el idioma solicitado.
+
+| Parámetro | Obligatorio | Valores |
+| --- | --- | --- |
+| `media_type` | No | `all` (predeterminado), `movie` o `tv`. |
+| `language` | No | `es-MX` por defecto. |
+
+```json
+{
+  "genres": [
+    { "id": 28, "name": "Acción", "media_types": ["movie"] },
+    { "id": 18, "name": "Drama", "media_types": ["movie", "tv"] }
+  ]
+}
+```
+
+Los géneros se ordenan alfabéticamente según el idioma. `media_types` indica en qué catálogos aparece cada identificador; películas y series comparten algunos, como Drama (18). Cada catálogo se conserva 24 horas en caché por tipo e idioma.
+
 ### `GET /:media_type/:id`
 
 Detalle de una película (`/movie/550`) o serie (`/tv/1399`). `media_type` debe ser `movie` o `tv` e `id` un entero positivo de TMDB. Parámetros: `language`. Responde 404 con `{"error":"Contenido no encontrado"}` cuando TMDB no tiene ese contenido.

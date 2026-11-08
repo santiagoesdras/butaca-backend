@@ -1,8 +1,9 @@
 import { finish, positiveInt, service } from '../../shared/http.js';
 import { choice, language, mediaRef, only, page, searchText, type MediaType } from './params.js';
-import { cached, client, details, paged } from './tmdb.js';
+import { cached, client, details, genreList, paged } from './tmdb.js';
 
 const base = '/api/v1/media';
+const GENRES_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function media(token: string, origin = 'https://api.themoviedb.org', timeout = 4500) {
   if (!token.trim()) throw new Error('Se requiere TMDB_READ_ACCESS_TOKEN');
@@ -24,6 +25,25 @@ export function media(token: string, origin = 'https://api.themoviedb.org', time
   const detail = cached(ttl, max, async (q: { type: MediaType; id: number; language: string }) =>
     details(await tmdb(`/${q.type}/${q.id}`, { language: q.language }), q.type, q.id));
 
+  // Los catálogos de géneros casi no cambian: se conservan un día por tipo e idioma.
+  const genreCatalog = cached(GENRES_TTL_MS, max, async (q: { type: MediaType; language: string }) =>
+    genreList(await tmdb(`/genre/${q.type}/list`, { language: q.language })));
+
+  const genres = async (type: MediaType | 'all', lang: string) => {
+    const types: MediaType[] = type === 'all' ? ['movie', 'tv'] : [type];
+    const lists = await Promise.all(types.map(t => genreCatalog({ type: t, language: lang })));
+    const merged = new Map<number, { id: number; name: string; media_types: MediaType[] }>();
+    lists.forEach((list, index) => {
+      for (const { id, name } of list.genres) {
+        const entry = merged.get(id) ?? { id, name, media_types: [] };
+        entry.media_types.push(types[index]!);
+        merged.set(id, entry);
+      }
+    });
+    const collator = new Intl.Collator(lang);
+    return { genres: [...merged.values()].sort((a, b) => collator.compare(a.name, b.name)) };
+  };
+
   const app = service('media-service');
 
   app.get(base + '/trending', async (req, res) => {
@@ -39,6 +59,11 @@ export function media(token: string, origin = 'https://api.themoviedb.org', time
       page: page(req.query),
       language: language(req.query)
     }));
+  });
+
+  app.get(base + '/genres', async (req, res) => {
+    only(req.query, ['media_type', 'language']);
+    res.json(await genres(choice(req.query, 'media_type', ['all', 'movie', 'tv'], 'all'), language(req.query)));
   });
 
   // Debe registrarse después de las rutas fijas de un segmento.
