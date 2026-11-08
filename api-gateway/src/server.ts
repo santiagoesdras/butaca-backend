@@ -6,6 +6,12 @@ import { finish, HttpFailure, service, upstream } from '../../shared/http.js';
 
 const media = '/api/v1/media';
 
+// Evita que segmentos como `..` alteren la ruta interna; Media valida el valor exacto.
+function segment(value: unknown) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(value)) throw new HttpFailure(400, 'Ruta inválida');
+  return value;
+}
+
 export function gateway(mediaOrigin: string, frontendOrigin: string) {
   const app = service('api-gateway');
   app.use(helmet());
@@ -30,6 +36,7 @@ export function gateway(mediaOrigin: string, frontendOrigin: string) {
 
   forward(media + '/trending');
   forward(media + '/search');
+  forward(media + '/:media_type/:id', req => `${media}/${segment(req.params.media_type)}/${segment(req.params.id)}`);
   return finish(app);
 }
 

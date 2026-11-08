@@ -1,6 +1,6 @@
 import { finish, positiveInt, service } from '../../shared/http.js';
-import { choice, language, only, page, searchText, type MediaType } from './params.js';
-import { cached, client, paged } from './tmdb.js';
+import { choice, language, mediaRef, only, page, searchText, type MediaType } from './params.js';
+import { cached, client, details, paged } from './tmdb.js';
 
 const base = '/api/v1/media';
 
@@ -21,6 +21,9 @@ export function media(token: string, origin = 'https://api.themoviedb.org', time
     return paged(raw, q.type === 'all' ? undefined : q.type);
   });
 
+  const detail = cached(ttl, max, async (q: { type: MediaType; id: number; language: string }) =>
+    details(await tmdb(`/${q.type}/${q.id}`, { language: q.language }), q.type, q.id));
+
   const app = service('media-service');
 
   app.get(base + '/trending', async (req, res) => {
@@ -36,6 +39,13 @@ export function media(token: string, origin = 'https://api.themoviedb.org', time
       page: page(req.query),
       language: language(req.query)
     }));
+  });
+
+  // Debe registrarse después de las rutas fijas de un segmento.
+  app.get(base + '/:media_type/:id', async (req, res) => {
+    const { type, id } = mediaRef(req.params);
+    only(req.query, ['language']);
+    res.json(await detail({ type, id, language: language(req.query) }));
   });
 
   return finish(app);

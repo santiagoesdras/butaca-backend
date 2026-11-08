@@ -75,6 +75,23 @@ GET /api/v1/media/search?query=dune&media_type=all&page=1&language=es-MX
 
 Responde un listado paginado. Con `media_type=all` se excluyen las personas, por lo que una página puede tener menos de 20 elementos y `total_results` también cuenta las personas que encontró TMDB. Se omite contenido para adultos.
 
+### `GET /:media_type/:id`
+
+Detalle de una película (`/movie/550`) o serie (`/tv/1399`). `media_type` debe ser `movie` o `tv` e `id` un entero positivo de TMDB. Parámetros: `language`. Responde 404 con `{"error":"Contenido no encontrado"}` cuando TMDB no tiene ese contenido.
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `id`, `media_type`, `title`, `poster_path`, `overview`, `release_date`, `vote_average` | | Igual que en el resumen. |
+| `original_title` | texto | Título en el idioma original. |
+| `tagline` | texto o `null` | Frase promocional. |
+| `status` | texto o `null` | Estado según TMDB, por ejemplo `Released` o `Returning Series`. |
+| `backdrop_path` | texto o `null` | Imagen de fondo. |
+| `genres` | `{ id, name }[]` | Géneros con nombre en el idioma solicitado. |
+| `vote_count` | entero o `null` | Número de votos. |
+| `runtime` | entero o `null` | Duración en minutos; en series, duración típica del episodio. |
+| `number_of_seasons`, `number_of_episodes` | entero o `null` | Solo series. |
+| `seasons` | `{ season_number, name, episode_count, air_date, poster_path }[]` | Solo series. La temporada 0 suele contener especiales. |
+
 ### Caché, tiempos y errores
 
 Media Service guarda cada respuesta en una caché LRU en memoria durante `CACHE_TTL_MS`, con un máximo de `CACHE_MAX_ENTRIES` entradas por tipo de consulta, y comparte las consultas en curso con los mismos parámetros. Espera hasta 4,5 segundos a TMDB. El Gateway limita las rutas de la API a 120 solicitudes por minuto por IP y espera hasta 7 segundos a Media Service. Los errores se devuelven como JSON con el campo `error`.

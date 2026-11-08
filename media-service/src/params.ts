@@ -35,6 +35,15 @@ export function choice<T extends string>(query: Query, name: string, allowed: re
   return value as T;
 }
 
+/** Valida los segmentos `/:media_type/:id` del detalle. */
+export function mediaRef(params: Record<string, unknown>) {
+  const type = params.media_type;
+  const id = typeof params.id === 'string' ? params.id : '';
+  if (type !== 'movie' && type !== 'tv') throw invalid('media_type debe ser movie o tv');
+  if (!/^[1-9]\d{0,9}$/.test(id) || !Number.isSafeInteger(Number(id))) throw invalid('id debe ser un entero positivo');
+  return { type: type as MediaType, id: Number(id) };
+}
+
 export function searchText(query: Query) {
   const value = text(query, 'query')?.trim().replace(/\s+/g, ' ') ?? '';
   if (value.length < 1 || value.length > 100) throw invalid('query es obligatorio y admite hasta 100 caracteres');
