@@ -1,0 +1,10 @@
+{
+  "name": "recommendation-service",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "express": "^5.1.0",
+    "jose": "^6.2.0",
+    "lru-cache": "^11.2.0"
+  }
+}

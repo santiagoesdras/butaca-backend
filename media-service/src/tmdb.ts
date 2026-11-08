@@ -1,6 +1,6 @@
 import { LRUCache } from 'lru-cache';
 import { HttpFailure, upstream } from '../../shared/http.js';
-import type { MediaType } from './params.js';
+import type { MediaType } from '../../shared/params.js';
 
 type Json = Record<string, unknown>;
 

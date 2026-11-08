@@ -1,4 +1,4 @@
-import { HttpFailure } from '../../shared/http.js';
+import { HttpFailure } from './http.js';
 
 export type Query = Record<string, unknown>;
 export type MediaType = 'movie' | 'tv';
@@ -48,4 +48,10 @@ export function searchText(query: Query) {
   const value = text(query, 'query')?.trim().replace(/\s+/g, ' ') ?? '';
   if (value.length < 1 || value.length > 100) throw invalid('query es obligatorio y admite hasta 100 caracteres');
   return value;
+}
+
+export function limit(query: Query, max: number, fallback: number) {
+  const value = text(query, 'limit') ?? String(fallback);
+  if (!/^[1-9]\d{0,2}$/.test(value) || Number(value) > max) throw invalid(`limit debe ser un entero entre 1 y ${max}`);
+  return Number(value);
 }

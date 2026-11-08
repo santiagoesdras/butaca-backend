@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package*.json ./
 COPY api-gateway/package.json api-gateway/
 COPY media-service/package.json media-service/
+COPY recommendation-service/package.json recommendation-service/
 
 FROM dependencies AS build
 RUN npm ci --ignore-scripts
@@ -10,6 +11,7 @@ COPY tsconfig.json ./
 COPY shared shared
 COPY api-gateway/src api-gateway/src
 COPY media-service/src media-service/src
+COPY recommendation-service/src recommendation-service/src
 RUN npm run build
 
 FROM dependencies AS production

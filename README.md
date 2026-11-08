@@ -141,3 +141,62 @@ Media Service guarda cada respuesta en una caché LRU en memoria durante `CACHE_
 | 504 | Venció el tiempo de espera de una consulta. |
 
 Datos suministrados por [TMDB](https://developer.themoviedb.org/reference/intro/getting-started). Este producto usa la API de TMDB, pero no está respaldado ni certificado por TMDB.
+
+## Recommendation Service
+
+Genera recomendaciones personales por reglas a partir de la biblioteca del usuario (Library Service) y del catálogo de Media Service. Escucha en el puerto 3003. Su conexión con el Gateway y Docker Compose corresponde a la rama `feature/gateway-recommendations`.
+
+| Variable | Uso |
+| --- | --- |
+| `SUPABASE_URL` | Obligatoria. URL del proyecto (`https://<ref>.supabase.co`). Define el emisor esperado (`<SUPABASE_URL>/auth/v1`) y la ubicación de las claves públicas (JWKS). |
+| `SUPABASE_JWT_AUDIENCE` | Audiencia esperada. Por defecto, `authenticated`. |
+| `SUPABASE_JWT_SECRET` | Opcional. Solo para proyectos que aún firman con el secreto JWT heredado (HS256); sin ella se verifican firmas ES256/RS256 con JWKS. |
+| `MEDIA_ORIGIN` | Media Service. Por defecto, `http://127.0.0.1:3001`. |
+| `LIBRARY_ORIGIN` | Library Service. Por defecto, `http://127.0.0.1:3002`. |
+| `RECOMMENDATIONS_CACHE_TTL_MS` | Vigencia de las recomendaciones de cada usuario. Por defecto, 120000. |
+
+### `GET /api/v1/recommendations`
+
+Requiere `Authorization: Bearer <access_token>` de Supabase. Se verifican firma, emisor, audiencia, expiración y `sub`; el usuario se toma siempre del token, y el mismo token se reenvía a Library Service para que solo devuelva los registros de ese usuario.
+
+| Parámetro | Obligatorio | Valores |
+| --- | --- | --- |
+| `media_type` | No | `all` (predeterminado), `movie` o `tv`. |
+| `limit` | No | Entero de 1 a 40. Predeterminado 20. |
+| `language` | No | `es-MX` por defecto. |
+
+```json
+{
+  "results": [
+    {
+      "id": 2, "media_type": "movie", "title": "Título", "poster_path": "/p.jpg", "overview": "",
+      "release_date": "2024-05-01", "vote_average": 7.1, "genre_ids": [28, 12],
+      "score": 0.812, "reasons": ["genres", "trending", "popular"]
+    }
+  ],
+  "based_on": { "favorites": 3, "watchlist": 5, "progress": 1 }
+}
+```
+
+`reasons` puede contener `genres` (coincide con los géneros del usuario), `trending`, `popular` y `top_rated` (calificación de 7,5 o más). Si `based_on` está en cero, el usuario todavía no tiene señales y se devuelven títulos populares y en tendencia. La respuesta lleva `Cache-Control: private, no-store`.
+
+Reglas:
+
+1. Se infieren los géneros preferidos a partir de hasta 20 títulos de la biblioteca: favoritos (peso 3), contenido visto (peso 2) y pendientes de la watchlist (peso 1). Los géneros de series y películas equivalentes se relacionan, por ejemplo Action & Adventure con Acción y Aventura.
+2. Los candidatos son las dos primeras páginas de populares de cada tipo y las tendencias del día.
+3. Se excluye todo lo que ya está en la biblioteca del usuario, incluido el contenido visto.
+4. La puntuación combina afinidad de géneros (60 %), posición en populares (15 %), calificación (15 %) y tendencia (10 %). Sin señales del usuario se usan solo popularidad (45 %), calificación (35 %) y tendencia (20 %).
+
+Cada resultado se guarda en una caché temporal por usuario (clave: `sub` verificado, tipo e idioma), por lo que los cambios en la biblioteca se reflejan cuando vence `RECOMMENDATIONS_CACHE_TTL_MS`.
+
+| HTTP | Significado |
+| --- | --- |
+| 400 | Parámetro desconocido o inválido. |
+| 401 | Falta el token, o es inválido, expiró o Library Service lo rechazó. |
+| 502 | Media o Library no disponibles, o respondieron con un formato inesperado. |
+| 503 | No fue posible obtener las claves públicas de Supabase. |
+| 504 | Venció el tiempo de espera de un servicio. |
+
+### Contrato pendiente con Library Service
+
+Mientras Library define sus rutas, Recommendation Service supone que expone `GET /api/v1/library/favorites`, `/watchlist` y `/progress`, autenticadas con el mismo Bearer token y que responden una lista (o `{ "results": [...] }`) de elementos con `tmdb_id` y `media_type`. Un elemento se considera visto si `completed` es `true` o si `status` es `watched`, `completed`, `finished`, `seen`, `visto` o `terminado`. Una ruta que responda 404 se trata como lista vacía, de modo que el servicio funciona aunque progreso aún no exista. Si el contrato final difiere, solo hay que ajustar `recommendation-service/src/sources.ts`.

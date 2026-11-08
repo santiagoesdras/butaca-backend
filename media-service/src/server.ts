@@ -1,5 +1,5 @@
 import { finish, positiveInt, service } from '../../shared/http.js';
-import { choice, language, mediaRef, only, page, searchText, type MediaType } from './params.js';
+import { choice, language, mediaRef, only, page, searchText, type MediaType } from '../../shared/params.js';
 import { cached, client, details, genreList, paged } from './tmdb.js';
 
 const base = '/api/v1/media';
