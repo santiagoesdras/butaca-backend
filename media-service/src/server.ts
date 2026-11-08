@@ -25,6 +25,25 @@ export function media(token: string, origin = 'https://api.themoviedb.org', time
   const detail = cached(ttl, max, async (q: { type: MediaType; id: number; language: string }) =>
     details(await tmdb(`/${q.type}/${q.id}`, { language: q.language }), q.type, q.id));
 
+  const popularOf = cached(ttl, max, async (q: { type: MediaType; page: number; language: string }) =>
+    paged(await tmdb(`/${q.type}/popular`, { page: q.page, language: q.language }), q.type));
+
+  // Con `all` se intercalan películas y series de la misma página para alternar ambos tipos.
+  const popular = async (type: MediaType | 'all', page: number, lang: string) => {
+    if (type !== 'all') return popularOf({ type, page, language: lang });
+    const [movies, shows] = await Promise.all([
+      popularOf({ type: 'movie', page, language: lang }), popularOf({ type: 'tv', page, language: lang })
+    ]);
+    const results = Array.from({ length: Math.max(movies.results.length, shows.results.length) },
+      (_, i) => [movies.results[i], shows.results[i]]).flat().filter(item => item !== undefined);
+    return {
+      page,
+      total_pages: Math.min(movies.total_pages, shows.total_pages),
+      total_results: movies.total_results + shows.total_results,
+      results
+    };
+  };
+
   // Los catálogos de géneros casi no cambian: se conservan un día por tipo e idioma.
   const genreCatalog = cached(GENRES_TTL_MS, max, async (q: { type: MediaType; language: string }) =>
     genreList(await tmdb(`/genre/${q.type}/list`, { language: q.language })));
@@ -59,6 +78,12 @@ export function media(token: string, origin = 'https://api.themoviedb.org', time
       page: page(req.query),
       language: language(req.query)
     }));
+  });
+
+  app.get(base + '/popular', async (req, res) => {
+    only(req.query, ['media_type', 'page', 'language']);
+    res.json(await popular(
+      choice(req.query, 'media_type', ['all', 'movie', 'tv'], 'all'), page(req.query), language(req.query)));
   });
 
   app.get(base + '/genres', async (req, res) => {

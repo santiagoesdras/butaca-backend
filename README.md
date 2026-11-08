@@ -75,6 +75,22 @@ GET /api/v1/media/search?query=dune&media_type=all&page=1&language=es-MX
 
 Responde un listado paginado. Con `media_type=all` se excluyen las personas, por lo que una página puede tener menos de 20 elementos y `total_results` también cuenta las personas que encontró TMDB. Se omite contenido para adultos.
 
+### `GET /popular`
+
+Contenido popular según TMDB.
+
+| Parámetro | Obligatorio | Valores |
+| --- | --- | --- |
+| `media_type` | No | `all` (predeterminado), `movie` o `tv`. |
+| `page` | No | Entero de 1 a 500. Predeterminado 1. |
+| `language` | No | `es-MX` por defecto. |
+
+```http
+GET /api/v1/media/popular?media_type=movie&page=1
+```
+
+Responde un listado paginado de 20 elementos por página. Con `media_type=all` se combinan la misma página de películas y de series, intercalando una de cada tipo (hasta 40 elementos); `total_pages` es el menor de ambos catálogos y `total_results` su suma. Para mostrar secciones separadas de películas y series, consulta cada tipo por separado.
+
 ### `GET /genres`
 
 Catálogo de géneros con nombres en el idioma solicitado.
