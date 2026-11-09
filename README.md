@@ -35,6 +35,24 @@ npm test
 
 Las pruebas compilan en modo estricto, levantan los servicios en puertos locales temporales y simulan TMDB por HTTP. Cubren salud, normalización, solicitudes concurrentes, caché, validación de parámetros y recuperación tras errores del proveedor.
 
+## Autenticación del Gateway
+
+Configura `SUPABASE_URL` con la URL del proyecto y `SUPABASE_JWT_AUDIENCE` con `authenticated` (valor predeterminado). Compose pasa ambas variables al Gateway.
+
+El Gateway verifica tokens ES256 usando las claves públicas de `SUPABASE_URL/auth/v1/.well-known/jwks.json`. Comprueba firma, emisor (`SUPABASE_URL/auth/v1`), audiencia, expiración y sujeto. El validador compartido se reutiliza en Recommendation Service, que conserva sus opciones de autenticación existentes.
+
+Las solicitudes a `/api/v1/library` y `/api/v1/recommendations`, incluidas sus subrutas, requieren `Authorization: Bearer <access_token>`. Los endpoints de Media y salud son públicos. El preflight CORS se procesa antes de la autenticación.
+
+| Respuesta | Significado |
+| --- | --- |
+| 401 | Token ausente, inválido o expirado. Incluye `WWW-Authenticate: Bearer`. |
+| 503 | Autenticación sin configurar o claves públicas temporalmente inaccesibles. |
+| 404 con token válido | La autenticación pasó, pero el enrutamiento de Library y recomendaciones sigue pendiente de sus entregas de integración. |
+
+Las respuestas de los dominios privados incluyen `Cache-Control: private, no-store`. Cada servicio privado también deberá verificar el token y autorizar sus operaciones. La identidad verificada queda disponible internamente en `res.locals.user`.
+
+La prueba `test/gateway-auth.test.mjs` genera claves temporales y cubre los casos de rechazo, aceptación, caché de claves, fallo del proveedor y consultas públicas. La verificación de una sesión real requiere un access token emitido por el proyecto Supabase.
+
 ## Endpoints de Media
 
 Todas las rutas usan el prefijo `/api/v1/media`, solo admiten `GET` y rechazan con HTTP 400 los parámetros desconocidos o repetidos. `language` es opcional, con formato `es-MX` o `en-US`; el valor predeterminado es `es-MX`.

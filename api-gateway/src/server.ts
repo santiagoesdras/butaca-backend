@@ -3,6 +3,7 @@ import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import type { Request } from 'express';
 import { finish, HttpFailure, service, upstream } from '../../shared/http.js';
+import { authenticator, type AuthConfig } from '../../shared/auth.js';
 
 const media = '/api/v1/media';
 
@@ -12,7 +13,8 @@ function segment(value: unknown) {
   return value;
 }
 
-export function gateway(mediaOrigin: string, frontendOrigin: string) {
+export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick<AuthConfig, 'supabaseUrl' | 'audience'>) {
+  const authenticate = auth ? authenticator({ ...auth, algorithms: ['ES256'] }) : undefined;
   const app = service('api-gateway');
   app.use(helmet());
   app.use(cors({ origin: frontendOrigin, methods: ['GET'] }));
@@ -20,6 +22,18 @@ export function gateway(mediaOrigin: string, frontendOrigin: string) {
     windowMs: 60000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false,
     message: { error: 'Demasiadas solicitudes' }
   }));
+
+  app.use(['/api/v1/library', '/api/v1/recommendations'], async (req, res, next) => {
+    res.set('Cache-Control', 'private, no-store');
+    if (!authenticate) throw new HttpFailure(503, 'Autenticación no configurada');
+    try {
+      res.locals.user = await authenticate(req.get('authorization'));
+    } catch (error) {
+      if (error instanceof HttpFailure && error.status === 401) res.set('WWW-Authenticate', 'Bearer');
+      throw error;
+    }
+    next();
+  });
 
   // Reenvía la consulta a Media Service conservando la query string y los errores del cliente.
   const forward = (route: string, target: (req: Request) => string = () => route) =>
@@ -43,6 +57,11 @@ export function gateway(mediaOrigin: string, frontendOrigin: string) {
 }
 
 if (import.meta.main) {
-  gateway(process.env.MEDIA_ORIGIN ?? 'http://127.0.0.1:3001', process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173')
+  const supabaseUrl = process.env.SUPABASE_URL;
+  gateway(
+    process.env.MEDIA_ORIGIN ?? 'http://127.0.0.1:3001',
+    process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173',
+    supabaseUrl ? { supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated' } : undefined
+  )
     .listen(8080, process.env.BIND_HOST ?? '127.0.0.1');
 }

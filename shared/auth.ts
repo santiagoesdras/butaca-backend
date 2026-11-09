@@ -1,10 +1,11 @@
 import { createRemoteJWKSet, errors, jwtVerify } from 'jose';
-import { HttpFailure } from '../../shared/http.js';
+import { HttpFailure } from './http.js';
 
 export type AuthConfig = {
   /** URL del proyecto, por ejemplo https://<ref>.supabase.co */
   supabaseUrl: string;
   audience?: string;
+  algorithms?: ('ES256' | 'RS256')[];
   /** Solo para proyectos con el secreto JWT heredado (HS256). Sin él se usan las claves públicas (JWKS). */
   jwtSecret?: string;
 };
@@ -20,14 +21,14 @@ const rejected = (error: unknown) => error instanceof errors.JOSEError &&
       'ERR_JWKS_MULTIPLE_MATCHING_KEYS'].includes(error.code));
 
 /** Verifica firma, emisor, audiencia y expiración de un access token de Supabase Auth. */
-export function authenticator({ supabaseUrl, audience = 'authenticated', jwtSecret }: AuthConfig) {
+export function authenticator({ supabaseUrl, audience = 'authenticated', jwtSecret, algorithms = ['ES256', 'RS256'] }: AuthConfig) {
   const issuer = new URL('/auth/v1', supabaseUrl).href;
   const options = { issuer, audience, requiredClaims: ['sub', 'exp'] };
   const verify = jwtSecret
     ? (token: string) => jwtVerify(token, new TextEncoder().encode(jwtSecret), { ...options, algorithms: ['HS256'] })
     : (() => {
         const keys = createRemoteJWKSet(new URL(issuer + '/.well-known/jwks.json'), { timeoutDuration: 3000 });
-        return (token: string) => jwtVerify(token, keys, { ...options, algorithms: ['ES256', 'RS256'] });
+        return (token: string) => jwtVerify(token, keys, { ...options, algorithms });
       })();
 
   return async (authorization: string | undefined): Promise<User> => {

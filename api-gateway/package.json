@@ -3,9 +3,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "express": "^5.1.0",
-    "helmet": "^8.1.0",
     "cors": "^2.8.5",
-    "express-rate-limit": "^8.1.0"
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
+    "jose": "^6.2.16"
   }
 }
