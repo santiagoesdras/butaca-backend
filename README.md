@@ -89,7 +89,7 @@ Contenido popular según TMDB.
 GET /api/v1/media/popular?media_type=movie&page=1
 ```
 
-Responde un listado paginado de 20 elementos por página. Con `media_type=all` se combinan la misma página de películas y de series, intercalando una de cada tipo (hasta 40 elementos); `total_pages` es el menor de ambos catálogos y `total_results` su suma. Para mostrar secciones separadas de películas y series, consulta cada tipo por separado.
+Responde un listado paginado de 20 elementos por página. Con `media_type=all` se combinan la misma página de películas y de series, intercalando una de cada tipo (hasta 40 elementos). `total_pages` es el del catálogo más largo y `total_results` la suma de ambos: cuando un tipo se agota, las páginas siguientes solo contienen el otro, y si un catálogo está vacío se recorre el otro completo. Para mostrar secciones separadas de películas y series, consulta cada tipo por separado.
 
 ### `GET /genres`
 
@@ -199,4 +199,4 @@ Cada resultado se guarda en una caché temporal por usuario (clave: `sub` verifi
 
 ### Contrato pendiente con Library Service
 
-Mientras Library define sus rutas, Recommendation Service supone que expone `GET /api/v1/library/favorites`, `/watchlist` y `/progress`, autenticadas con el mismo Bearer token y que responden una lista (o `{ "results": [...] }`) de elementos con `tmdb_id` y `media_type`. Un elemento se considera visto si `completed` es `true` o si `status` es `watched`, `completed`, `finished`, `seen`, `visto` o `terminado`. Una ruta que responda 404 se trata como lista vacía, de modo que el servicio funciona aunque progreso aún no exista. Si el contrato final difiere, solo hay que ajustar `recommendation-service/src/sources.ts`.
+Mientras Library define sus rutas, Recommendation Service supone que expone `GET /api/v1/library/favorites`, `/watchlist` y `/progress`, autenticadas con el mismo Bearer token y que responden una lista (o `{ "results": [...] }`) de elementos con `tmdb_id` y `media_type`. Un elemento se considera visto si `completed` es `true` o si `status` es `watched`, `completed`, `finished`, `seen`, `visto` o `terminado`. Favoritos y watchlist son obligatorios: si alguna de esas rutas responde 404, la consulta falla con 502 para no confundir una integración incompleta con una biblioteca vacía ni recomendar contenido ya visto. Progreso es la única ruta opcional mientras se implementa (`OPTIONAL_LISTS`): su 404 se trata como lista vacía. Si el contrato final difiere, solo hay que ajustar `recommendation-service/src/sources.ts`.

@@ -44,7 +44,9 @@ test('Recomendaciones por reglas con autorización y caché por usuario', async 
       watchlist: [{ tmdb_id: 5, media_type: 'tv', status: 'watched' }, { tmdb_id: 404, media_type: 'movie' }]
     },
     'user-2': { favorites: [], watchlist: [] },
-    'user-3': { favorites: 'roto' }
+    'user-3': { favorites: 'roto', watchlist: [] },
+    'user-4': { favorites: [] },
+    'user-5': {}
   };
   const libraryCalls = [];
   const libraryOrigin = await listen(t, (req, res) => {
@@ -111,4 +113,13 @@ test('Recomendaciones por reglas con autorización y caché por usuario', async 
   const broken = await as('user-3');
   assert.equal(broken.status, 502);
   assert.deepEqual(await broken.json(), { error: 'Respuesta inválida de Library Service' });
+
+  // Favoritos y watchlist son obligatorios: su ausencia no se confunde con una biblioteca vacía.
+  // Progreso (user-1 no lo tiene) es la única ruta opcional.
+  const noWatchlist = await as('user-4');
+  assert.equal(noWatchlist.status, 502);
+  assert.deepEqual(await noWatchlist.json(), { error: 'Library Service no expone /api/v1/library/watchlist' });
+  const noLibrary = await as('user-5');
+  assert.equal(noLibrary.status, 502);
+  assert.match((await noLibrary.json()).error, /no expone \/api\/v1\/library\/(favorites|watchlist)/);
 });

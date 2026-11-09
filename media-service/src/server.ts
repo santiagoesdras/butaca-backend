@@ -28,17 +28,26 @@ export function media(token: string, origin = 'https://api.themoviedb.org', time
   const popularOf = cached(ttl, max, async (q: { type: MediaType; page: number; language: string }) =>
     paged(await tmdb(`/${q.type}/popular`, { page: q.page, language: q.language }), q.type));
 
-  // Con `all` se intercalan películas y series de la misma página para alternar ambos tipos.
+  // Página de un tipo que respeta su total: si el catálogo ya se agotó, no aporta resultados.
+  // La página 1 (en caché) indica cuántas páginas tiene cada catálogo.
+  const popularPage = async (type: MediaType, page: number, lang: string) => {
+    const first = await popularOf({ type, page: 1, language: lang });
+    if (page === 1) return first;
+    const total = { total_pages: first.total_pages, total_results: first.total_results };
+    if (page > first.total_pages) return { page, ...total, results: [] };
+    return { ...(await popularOf({ type, page, language: lang })), ...total };
+  };
+
+  // Con `all` se intercalan películas y series de la misma página. Se puede recorrer hasta el
+  // catálogo más largo; cuando un tipo se agota, las páginas siguientes solo contienen el otro.
   const popular = async (type: MediaType | 'all', page: number, lang: string) => {
     if (type !== 'all') return popularOf({ type, page, language: lang });
-    const [movies, shows] = await Promise.all([
-      popularOf({ type: 'movie', page, language: lang }), popularOf({ type: 'tv', page, language: lang })
-    ]);
+    const [movies, shows] = await Promise.all([popularPage('movie', page, lang), popularPage('tv', page, lang)]);
     const results = Array.from({ length: Math.max(movies.results.length, shows.results.length) },
       (_, i) => [movies.results[i], shows.results[i]]).flat().filter(item => item !== undefined);
     return {
       page,
-      total_pages: Math.min(movies.total_pages, shows.total_pages),
+      total_pages: Math.max(movies.total_pages, shows.total_pages),
       total_results: movies.total_results + shows.total_results,
       results
     };

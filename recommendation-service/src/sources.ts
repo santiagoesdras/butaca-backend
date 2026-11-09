@@ -35,14 +35,23 @@ function items(raw: unknown): LibraryItem[] {
   });
 }
 
+/**
+ * Favoritos y watchlist son obligatorios: si Library no los expone, se responde con error para no
+ * recomendar contenido ya visto. Progreso es opcional mientras se implementa: un 404 en esa ruta se
+ * trata como lista vacía. Quitar 'progress' de este conjunto cuando Library lo publique.
+ */
+export const OPTIONAL_LISTS: ReadonlySet<keyof Library> = new Set(['progress']);
+
 export function library(origin: string, timeout: number) {
   const list = async (name: keyof Library, token: string) => {
     let raw: unknown;
     try {
       raw = await upstream(new URL('/api/v1/library/' + name, origin), timeout, { Authorization: 'Bearer ' + token });
     } catch (error) {
-      // 404: la ruta todavía no existe en Library Service; se trata como lista vacía.
-      if (error instanceof HttpFailure && error.status === 404) return [];
+      if (error instanceof HttpFailure && error.status === 404) {
+        if (OPTIONAL_LISTS.has(name)) return [];
+        throw new HttpFailure(502, `Library Service no expone /api/v1/library/${name}`);
+      }
       if (error instanceof HttpFailure && [401, 403].includes(error.status)) throw new HttpFailure(401, 'Token rechazado por Library Service');
       if (error instanceof HttpFailure && error.status === 504) throw error;
       throw new HttpFailure(502, 'Library Service no disponible');
