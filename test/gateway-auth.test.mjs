@@ -46,10 +46,11 @@ test('Gateway valida JWT y protege ambos dominios privados', async t => {
       assert.equal(typeof body.error, 'string');
       assert.ok(!body.error.includes(token));
     }
-    // El token válido supera la autenticación. El enrutamiento de estos servicios es otra entrega.
+    // El token válido supera la autenticación; Library no tiene ruta y Recommendation no tiene origen aquí.
     const accepted = await fetch(base + path, { headers: { Authorization: 'Bearer ' + valid } });
-    assert.equal(accepted.status, 404);
-    assert.deepEqual(await accepted.json(), { error: 'Ruta desconocida' });
+    assert.equal(accepted.status, path === '/api/v1/recommendations' ? 503 : 404);
+    assert.deepEqual(await accepted.json(), { error: path === '/api/v1/recommendations'
+      ? 'Recommendation Service no configurado' : 'Ruta desconocida' });
   }
   assert.equal(keyRequests, 1, 'reutiliza las claves públicas');
   assert.equal((await fetch(base + '/health/live')).status, 200);

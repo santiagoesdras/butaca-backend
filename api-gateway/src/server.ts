@@ -13,7 +13,8 @@ function segment(value: unknown) {
   return value;
 }
 
-export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick<AuthConfig, 'supabaseUrl' | 'audience'>) {
+export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick<AuthConfig, 'supabaseUrl' | 'audience'>,
+  recommendationOrigin?: string, recommendationTimeout = 7000) {
   const authenticate = auth ? authenticator({ ...auth, algorithms: ['ES256'] }) : undefined;
   const app = service('api-gateway');
   app.use(helmet());
@@ -53,6 +54,23 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
   forward(media + '/genres');
   forward(media + '/popular');
   forward(media + '/:media_type/:id', req => `${media}/${segment(req.params.media_type)}/${segment(req.params.id)}`);
+
+  app.get('/api/v1/recommendations', async (req, res) => {
+    if (!recommendationOrigin) throw new HttpFailure(503, 'Recommendation Service no configurado');
+    const url = new URL('/api/v1/recommendations', recommendationOrigin);
+    url.search = new URL(req.originalUrl, 'http://gateway').search;
+    try {
+      res.json(await upstream(url, recommendationTimeout, {
+        Authorization: 'Bearer ' + res.locals.user.token
+      }));
+    } catch (error) {
+      if (error instanceof HttpFailure && [400, 401, 403, 429, 503, 504].includes(error.status)) {
+        if (error.status === 401) res.set('WWW-Authenticate', 'Bearer');
+        throw error;
+      }
+      throw new HttpFailure(502, 'Recommendation Service no disponible');
+    }
+  });
   return finish(app);
 }
 
@@ -61,7 +79,8 @@ if (import.meta.main) {
   gateway(
     process.env.MEDIA_ORIGIN ?? 'http://127.0.0.1:3001',
     process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173',
-    supabaseUrl ? { supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated' } : undefined
+    supabaseUrl ? { supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated' } : undefined,
+    process.env.RECOMMENDATION_ORIGIN
   )
     .listen(8080, process.env.BIND_HOST ?? '127.0.0.1');
 }

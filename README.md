@@ -1,6 +1,6 @@
 # Butaca Backend
 
-El API Gateway recibe las consultas del cliente en el puerto 8080. Media Service consulta TMDB y devuelve películas y series normalizadas. Ambos servicios usan Node.js 24, TypeScript y Express.
+El API Gateway recibe las consultas del cliente en el puerto 8080. Media Service consulta TMDB y devuelve películas y series normalizadas. Recommendation Service calcula recomendaciones personales consumiendo Media y Library. Los servicios usan Node.js 24, TypeScript y Express.
 
 ## Ejecutar con Docker Compose
 
@@ -22,7 +22,7 @@ curl -i http://127.0.0.1:8080/health/live
 curl -i "http://127.0.0.1:8080/api/v1/media/trending?language=es-MX"
 ```
 
-En Windows PowerShell usa `curl.exe`. Ambos servicios deben aparecer como saludables. La consulta de tendencias con un token válido debe responder con HTTP 200 y un objeto con `page` y `results`.
+En Windows PowerShell usa `curl.exe`. Los tres servicios de Compose deben aparecer como saludables. La consulta de tendencias con un token válido de TMDB debe responder con HTTP 200 y un objeto con `page` y `results`.
 
 Compose publica el Gateway en el loopback del host. Media Service escucha en el puerto 3001 dentro de la red de Compose y necesita salida HTTPS hacia TMDB. Cada contenedor tiene un límite inicial de 192 MiB. Los healthchecks consultan `/health/live` y comprueban el proceso independientemente de TMDB. Para detener este proyecto, ejecuta `docker compose down` desde su raíz.
 
@@ -47,7 +47,7 @@ Las solicitudes a `/api/v1/library` y `/api/v1/recommendations`, incluidas sus s
 | --- | --- |
 | 401 | Token ausente, inválido o expirado. Incluye `WWW-Authenticate: Bearer`. |
 | 503 | Autenticación sin configurar o claves públicas temporalmente inaccesibles. |
-| 404 con token válido | La autenticación pasó, pero el enrutamiento de Library y recomendaciones sigue pendiente de sus entregas de integración. |
+| 404 con token válido en Library | La autenticación pasó, pero el enrutamiento de Library sigue pendiente. |
 
 Las respuestas de los dominios privados incluyen `Cache-Control: private, no-store`. Cada servicio privado también deberá verificar el token y autorizar sus operaciones. La identidad verificada queda disponible internamente en `res.locals.user`.
 
@@ -162,7 +162,11 @@ Datos suministrados por [TMDB](https://developer.themoviedb.org/reference/intro/
 
 ## Recommendation Service
 
-Genera recomendaciones personales por reglas a partir de la biblioteca del usuario (Library Service) y del catálogo de Media Service. Escucha en el puerto 3003. Su conexión con el Gateway y Docker Compose corresponde a la rama `feature/gateway-recommendations`.
+Genera recomendaciones personales por reglas a partir de la biblioteca del usuario (Library Service) y del catálogo de Media Service. Compose lo ejecuta en el puerto interno 3003, sin publicarlo al host, con los mismos límites de recursos y healthcheck de proceso que los demás servicios.
+
+El Gateway publica únicamente `GET /api/v1/recommendations`: valida el JWT, conserva la consulta y reenvía el Bearer verificado al servicio, que vuelve a autenticarlo. El timeout del Gateway es de 7 segundos. Para ejecutar fuera de Compose, configura `RECOMMENDATION_ORIGIN` en el Gateway (por ejemplo `http://127.0.0.1:3003`); sin esa variable la ruta autenticada responde 503.
+
+Compose requiere ahora `SUPABASE_URL`, además del token de TMDB. `LIBRARY_ORIGIN` apunta por defecto a `http://library-service:3002`, pero Library todavía no está implementado ni incluido en Compose. Hasta integrar Library, una consulta autenticada de recomendaciones responde 502; el healthcheck solo confirma que el proceso está vivo. `RECOMMENDATIONS_CACHE_TTL_MS` permite ajustar la caché desde `.env`.
 
 | Variable | Uso |
 | --- | --- |
