@@ -20,6 +20,8 @@ services:
     environment:
       MEDIA_ORIGIN: http://media-service:3001
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
     depends_on:
       media-service:
         condition: service_healthy

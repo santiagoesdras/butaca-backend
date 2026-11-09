@@ -1,7 +1,7 @@
 import { LRUCache } from 'lru-cache';
 import { finish, positiveInt, service } from '../../shared/http.js';
 import { choice, language, limit, only, type MediaType } from '../../shared/params.js';
-import { authenticator, type AuthConfig } from './auth.js';
+import { authenticator, type AuthConfig } from '../../shared/auth.js';
 import { rank, seeds, type Recommendation } from './engine.js';
 import { key, library, media } from './sources.js';
 
