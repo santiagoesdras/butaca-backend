@@ -1,3 +1,4 @@
+
 generator client {
   provider = "prisma-client"
   output   = "../generated/prisma"
@@ -6,4 +7,193 @@ generator client {
 datasource db {
   provider = "postgresql"
   schemas  = ["library"]
+}
+
+enum MediaType {
+  MOVIE
+  TV
+
+  @@map("media_type")
+  @@schema("library")
+}
+
+enum ProgressStatus {
+  IN_PROGRESS
+  COMPLETED
+  ON_HOLD
+  DROPPED
+
+  @@map("progress_status")
+  @@schema("library")
+}
+
+model Profile {
+  id          String   @id @db.Uuid
+  displayName String?  @map("display_name") @db.VarChar(120)
+  avatarUrl   String?  @map("avatar_url") @db.VarChar(500)
+  timeZone    String   @default("UTC") @map("time_zone") @db.VarChar(64)
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  moodHistory          MoodHistory[]
+  favorites            Favorite[]
+  watchlist            WatchlistItem[]
+  progress             Progress[]
+  savedRecommendations SavedRecommendation[]
+  cameraConsent        CameraConsent?
+
+  @@map("profiles")
+  @@schema("library")
+}
+
+model Mood {
+  code String @id @db.VarChar(20)
+  name String @db.VarChar(50)
+
+  primaryFor           MoodHistory[]
+  scores               MoodHistoryScore[]
+  savedRecommendations SavedRecommendation[]
+
+  @@map("moods")
+  @@schema("library")
+}
+
+model MoodHistory {
+  id              String   @id @default(uuid()) @db.Uuid
+  profileId       String   @map("profile_id") @db.Uuid
+  primaryMoodCode String   @map("primary_mood_code") @db.VarChar(20)
+  detectionDate   DateTime @map("detection_date") @db.Date
+  detectedAt      DateTime @default(now()) @map("detected_at") @db.Timestamptz(6)
+  source          String   @default("AWS_REKOGNITION") @db.VarChar(30)
+
+  profile              Profile               @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  primaryMood          Mood                  @relation(fields: [primaryMoodCode], references: [code], onDelete: Restrict)
+  scores               MoodHistoryScore[]
+  savedRecommendations SavedRecommendation[]
+
+  @@unique([profileId, detectionDate], map: "mood_history_profile_date_key")
+  @@unique([id, profileId], map: "mood_history_id_profile_key")
+  @@index([profileId, detectedAt], map: "mood_history_profile_detected_at_idx")
+  @@map("mood_history")
+  @@schema("library")
+}
+
+model MoodHistoryScore {
+  id            String  @id @default(uuid()) @db.Uuid
+  moodHistoryId String  @map("mood_history_id") @db.Uuid
+  moodCode      String  @map("mood_code") @db.VarChar(20)
+  confidence    Decimal @db.Decimal(5, 2)
+
+  moodHistory MoodHistory @relation(fields: [moodHistoryId], references: [id], onDelete: Cascade)
+  mood        Mood        @relation(fields: [moodCode], references: [code], onDelete: Restrict)
+
+  @@unique([moodHistoryId, moodCode], map: "mood_history_scores_history_mood_key")
+  @@map("mood_history_scores")
+  @@schema("library")
+}
+
+model Favorite {
+  id        String    @id @default(uuid()) @db.Uuid
+  profileId String    @map("profile_id") @db.Uuid
+  tmdbId    Int       @map("tmdb_id")
+  mediaType MediaType @map("media_type")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, tmdbId, mediaType], map: "favorites_profile_tmdb_media_key")
+  @@index([profileId, createdAt], map: "favorites_profile_created_at_idx")
+  @@map("favorites")
+  @@schema("library")
+}
+
+model WatchlistItem {
+  id        String    @id @default(uuid()) @db.Uuid
+  profileId String    @map("profile_id") @db.Uuid
+  tmdbId    Int       @map("tmdb_id")
+  mediaType MediaType @map("media_type")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, tmdbId, mediaType], map: "watchlist_items_profile_tmdb_media_key")
+  @@index([profileId, createdAt], map: "watchlist_items_profile_created_at_idx")
+  @@map("watchlist_items")
+  @@schema("library")
+}
+
+model Progress {
+  id              String         @id @default(uuid()) @db.Uuid
+  profileId       String         @map("profile_id") @db.Uuid
+  tmdbId          Int            @map("tmdb_id")
+  mediaType       MediaType      @map("media_type")
+  status          ProgressStatus @default(IN_PROGRESS)
+  positionSeconds Int?           @map("position_seconds")
+  durationSeconds Int?           @map("duration_seconds")
+  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  profile  Profile          @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  episodes ProgressEpisode[]
+
+  @@unique([profileId, tmdbId, mediaType], map: "progress_profile_tmdb_media_key")
+  @@unique([id, profileId], map: "progress_id_profile_key")
+  @@index([profileId, status], map: "progress_profile_status_idx")
+  @@map("progress")
+  @@schema("library")
+}
+
+model ProgressEpisode {
+  id            String   @id @default(uuid()) @db.Uuid
+  progressId    String   @map("progress_id") @db.Uuid
+  profileId     String   @map("profile_id") @db.Uuid
+  seasonNumber  Int      @map("season_number")
+  episodeNumber Int      @map("episode_number")
+  watchedAt     DateTime @default(now()) @map("watched_at") @db.Timestamptz(6)
+
+  progress Progress @relation(fields: [progressId, profileId], references: [id, profileId], onDelete: Cascade)
+
+  @@unique([progressId, seasonNumber, episodeNumber], map: "progress_episodes_progress_season_episode_key")
+  @@index([profileId, watchedAt], map: "progress_episodes_profile_watched_at_idx")
+  @@map("progress_episodes")
+  @@schema("library")
+}
+
+model SavedRecommendation {
+  id              String    @id @default(uuid()) @db.Uuid
+  profileId       String    @map("profile_id") @db.Uuid
+  moodHistoryId   String    @map("mood_history_id") @db.Uuid
+  tmdbId          Int       @map("tmdb_id")
+  mediaType       MediaType @map("media_type")
+  title           String    @db.VarChar(255)
+  posterPath      String?   @map("poster_path") @db.VarChar(500)
+  overview        String?   @db.Text
+  releaseDate     String?   @map("release_date") @db.VarChar(10)
+  voteAverage     Decimal?  @map("vote_average") @db.Decimal(3, 1)
+  genreIds        Int[]     @default([]) @map("genre_ids")
+  moodCodeAtSave  String    @map("mood_code_at_save") @db.VarChar(20)
+  moodDetectedAt  DateTime  @map("mood_detected_at") @db.Timestamptz(6)
+  savedAt         DateTime  @default(now()) @map("saved_at") @db.Timestamptz(6)
+
+  profile     Profile     @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  moodHistory MoodHistory @relation(fields: [moodHistoryId, profileId], references: [id, profileId], onDelete: Cascade)
+  moodAtSave  Mood        @relation(fields: [moodCodeAtSave], references: [code], onDelete: Restrict)
+
+  @@unique([moodHistoryId, tmdbId, mediaType], map: "saved_recommendations_history_tmdb_media_key")
+  @@index([profileId, savedAt], map: "saved_recommendations_profile_saved_at_idx")
+  @@map("saved_recommendations")
+  @@schema("library")
+}
+
+model CameraConsent {
+  id            String    @id @default(uuid()) @db.Uuid
+  profileId     String    @unique @map("profile_id") @db.Uuid
+  grantedAt     DateTime  @default(now()) @map("granted_at") @db.Timestamptz(6)
+  revokedAt     DateTime? @map("revoked_at") @db.Timestamptz(6)
+  policyVersion String    @map("policy_version") @db.VarChar(50)
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@map("camera_consents")
+  @@schema("library")
 }
