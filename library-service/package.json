@@ -1,5 +1,12 @@
 {
   "name": "library-service",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "pg": "^8.23.1",
+    "express": "^5.1.0",
+    "jose": "^6.2.16"
+  }
 }

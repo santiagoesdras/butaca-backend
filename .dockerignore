@@ -2,5 +2,7 @@
 .github
 **/node_modules
 dist
+library-service/generated
 .env*
+**/.env*
 *.log
