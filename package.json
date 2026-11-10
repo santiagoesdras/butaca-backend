@@ -5,7 +5,8 @@
   "workspaces": [
     "api-gateway",
     "media-service",
-    "recommendation-service"
+    "recommendation-service",
+    "library-service"
   ],
   "engines": {
     "node": "24.x"
@@ -18,11 +19,17 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^24.19.2",
-    "prisma": "7.10.1",
+    "@types/pg": "^8.23.1",
+    "prisma": "^7.10.1",
     "typescript": "~5.9"
   },
   "allowScripts": {
     "prisma@7.10.1": true,
     "@prisma/engines@7.10.1": true
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "pg": "^8.23.1"
   }
 }
