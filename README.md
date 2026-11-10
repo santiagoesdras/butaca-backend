@@ -1,5 +1,27 @@
 # Butaca Backend
 
+## Estado para integración con frontend
+
+Esta copia incorpora watchlist, progreso y su integración con el Gateway. Los cambios locales requieren revisión, PR y despliegue antes de considerarlos disponibles en el servidor público. La existencia de tablas no implica que sus endpoints estén implementados.
+
+| Función | Estado del código y contrato |
+| --- | --- |
+| Media: tendencias, búsqueda, populares, géneros y detalles | Implementado. Rutas públicas `/api/v1/media/*`, documentadas abajo. |
+| Watchlist | GET `/api/v1/library/watchlist`, PUT/DELETE `/api/v1/library/watchlist/:media_type/:tmdb_id`. JWT requerido, sin campos de usuario en la petición. Cambios locales de esta entrega. |
+| Favoritos | Modelo y migración disponibles; API pendiente en esta copia. |
+| Progreso | GET `/api/v1/library/progress`, PUT `/api/v1/library/progress/:media_type/:tmdb_id` y PUT/DELETE de episodios. JWT requerido. Cambios locales de esta entrega. |
+| Recomendaciones | Endpoint implementado, pero necesita las APIs de favoritos y watchlist de Library para funcionar con datos reales. No consume emociones. |
+| Análisis de cámara con AWS Rekognition | Pendiente: no existe endpoint de captura ni integración AWS en este código. Método, formato, límite, consentimiento y respuesta deben acordarse antes de integrar el frontend. |
+| Historial emocional | Tablas disponibles, API pendiente. La propuesta `GET /api/v1/history?period=7d|30d|year` no es una ruta implementada. |
+
+El esquema actual permite una detección por usuario y día; antes de implementar historial con múltiples registros diarios debe coordinarse esa diferencia. También deben acordarse la zona horaria y la traducción de códigos de emociones entre base de datos, AWS y frontend. Estos cambios no los realiza esta entrega.
+
+El frontend inicia sesión mediante Supabase Auth y envía el access token en `Authorization: Bearer <token>`. No usar API keys como token de usuario. Los proveedores OAuth se habilitan en Supabase, no mediante el Gateway. Las operaciones privadas determinan el usuario a partir del JWT; nunca desde `profile_id` o `user_id` enviados por el cliente.
+
+En el frontend actual, `VITE_API_URL` debe contener solo el origen del Gateway (`http://localhost:8080` en local), porque el cliente agrega `/api/v1/...`. En producción usar el origen HTTPS de Funnel del servidor desplegado. No agregar dos veces el prefijo. Configurar `FRONTEND_ORIGIN` con el origen exacto del frontend para CORS.
+
+Para ampliar el catálogo, consumir `/api/v1/media/popular?media_type=movie&page=1&language=es-MX` o `/api/v1/media/search?query=dune&media_type=movie&page=1&language=es-MX`. Usar `page`, `total_pages` y `total_results` de la respuesta; tendencias solo ofrece la primera página. Una lista vacía no es un error.
+
 El API Gateway recibe las consultas del cliente en el puerto 8080. Media Service consulta TMDB y devuelve películas y series normalizadas. Recommendation Service calcula recomendaciones personales consumiendo Media y Library. Los servicios usan Node.js 24, TypeScript y Express.
 
 ## Ejecutar con Docker Compose
@@ -12,6 +34,8 @@ Desde la raíz del repositorio, crea una copia local de `.env.example` llamada `
 | `FRONTEND_ORIGIN` | Origen permitido por CORS. Por defecto, `http://localhost:5173`. |
 | `CACHE_TTL_MS` | Vigencia de las respuestas de TMDB en caché, en milisegundos. Por defecto, 300000. |
 | `CACHE_MAX_ENTRIES` | Máximo de entradas en memoria por tipo de consulta. Por defecto, 64. |
+| `SUPABASE_URL` | URL del proyecto Supabase; requerida por los servicios privados. |
+| `DATABASE_URL` | Conexión PostgreSQL de Library. La migración y los perfiles deben existir previamente. |
 
 Con Docker y el complemento Compose disponibles, ejecuta:
 
@@ -22,18 +46,18 @@ curl -i http://127.0.0.1:8080/health/live
 curl -i "http://127.0.0.1:8080/api/v1/media/trending?language=es-MX"
 ```
 
-En Windows PowerShell usa `curl.exe`. Los tres servicios de Compose deben aparecer como saludables. La consulta de tendencias con un token válido de TMDB debe responder con HTTP 200 y un objeto con `page` y `results`.
+En Windows PowerShell usa `curl.exe`. Los cuatro servicios de Compose deben aparecer como saludables. La consulta de tendencias con un token válido de TMDB debe responder con HTTP 200 y un objeto con `page` y `results`. Compose no aplica migraciones ni semillas automáticamente. Si las variables están en `library-service/.env`, se puede seleccionar ese archivo con `docker compose --env-file library-service/.env up --build -d`, siempre que contenga también las demás variables requeridas. No dupliques credenciales en archivos diferentes.
 
 Compose publica el Gateway en el loopback del host. Media Service escucha en el puerto 3001 dentro de la red de Compose y necesita salida HTTPS hacia TMDB. Cada contenedor tiene un límite inicial de 192 MiB. Los healthchecks consultan `/health/live` y comprueban el proceso independientemente de TMDB. Para detener este proyecto, ejecuta `docker compose down` desde su raíz.
 
-## Verificar sin credenciales
+## Verificar sin consultar la base de datos
 
 ```sh
 npm ci
 npm test
 ```
 
-Las pruebas compilan en modo estricto, levantan los servicios en puertos locales temporales y simulan TMDB por HTTP. Cubren salud, normalización, solicitudes concurrentes, caché, validación de parámetros y recuperación tras errores del proveedor.
+Antes de `npm test`, generar el cliente Prisma con el comando documentado en la sección de Library. La generación requiere `DIRECT_URL` configurada, pero no consulta ni modifica la base de datos. Las pruebas normales compilan en modo estricto, levantan los servicios en puertos locales temporales y simulan TMDB por HTTP. Cubren salud, normalización, solicitudes concurrentes, caché, validación de parámetros y recuperación tras errores del proveedor. La prueba opcional de PostgreSQL solo se ejecuta al configurar expresamente sus variables.
 
 ## Autenticación del Gateway
 
@@ -47,7 +71,7 @@ Las solicitudes a `/api/v1/library` y `/api/v1/recommendations`, incluidas sus s
 | --- | --- |
 | 401 | Token ausente, inválido o expirado. Incluye `WWW-Authenticate: Bearer`. |
 | 503 | Autenticación sin configurar o claves públicas temporalmente inaccesibles. |
-| 404 con token válido en Library | La autenticación pasó, pero el enrutamiento de Library sigue pendiente. |
+| 404 con token válido en Library | La ruta solicitada no está implementada; actualmente solo se publican las operaciones de watchlist. |
 
 Las respuestas de los dominios privados incluyen `Cache-Control: private, no-store`. Cada servicio privado también deberá verificar el token y autorizar sus operaciones. La identidad verificada queda disponible internamente en `res.locals.user`.
 
@@ -160,13 +184,98 @@ Media Service guarda cada respuesta en una caché LRU en memoria durante `CACHE_
 
 Datos suministrados por [TMDB](https://developer.themoviedb.org/reference/intro/getting-started). Este producto usa la API de TMDB, pero no está respaldado ni certificado por TMDB.
 
+## Library Service: watchlist y progreso
+
+Library escucha en `127.0.0.1:3002` por defecto (`BIND_HOST` permite cambiar la interfaz). Esta entrega añade watchlist, progreso y su integración con Gateway/Compose; no implementa favoritos. Reutiliza el esquema y la migración integrados en el PR #18; no requiere otra migración. No llama a TMDB. En Compose escucha internamente en `0.0.0.0:3002`, sin publicar ese puerto al host.
+
+El Gateway reenvía únicamente las rutas de watchlist y progreso documentadas abajo y el JWT verificado. Conserva errores y respuestas DELETE sin cuerpo. Permite preflight CORS para GET, PUT y DELETE con Authorization y Content-Type, para el origen configurado. En ejecución local fuera de Docker, configurar `LIBRARY_ORIGIN=http://127.0.0.1:3002` en el Gateway; sin origen las rutas autenticadas responden 503. En Compose el origen se configura automáticamente. No expone rutas internas ni la salud de Library a través de un proxy genérico.
+
+Las rutas `/api/v1/library/*` verifican JWT ES256 de Supabase mediante `shared/auth.ts` (firma, emisor, audiencia, expiración y `sub` UUID). Cada consulta filtra por el usuario verificado; no se aceptan identificadores de usuario desde la petición. Las respuestas privadas incluyen `Cache-Control: private, no-store`.
+
+| Método y ruta | Respuesta |
+| --- | --- |
+| `GET /health/live` | `200 { "status": "ok" }`, público; verifica el proceso, no la base de datos. |
+| `GET /api/v1/library/watchlist` | `200 { "results": [...] }`, orden descendente de creación. |
+| `PUT /api/v1/library/watchlist/:media_type/:tmdb_id` | `200`, agrega o devuelve el elemento existente sin cambiar su fecha. |
+| `DELETE /api/v1/library/watchlist/:media_type/:tmdb_id` | `204`, incluso si no existía; no borra el progreso. |
+
+`media_type` debe ser exactamente `movie` o `tv`; `tmdb_id` es un entero de 1 a 2147483647, sin ceros iniciales. No se admiten parámetros de consulta. PUT y DELETE no necesitan cuerpo; solo se permite un objeto JSON vacío si se envía alguno. El límite JSON es 1 KiB. Enviar siempre `Authorization: Bearer <access_token>`.
+
+Un elemento tiene este formato (no expone el identificador del usuario):
+
+```json
+{
+  "tmdb_id": 42,
+  "media_type": "movie",
+  "created_at": "2026-11-10T00:00:00.000Z",
+  "status": "pending"
+}
+```
+
+`status` se deriva del registro existente en `Progress`: `in_progress`, `completed`, `on_hold` o `dropped`. Sin progreso es `pending`. Se actualiza mediante los endpoints de progreso, sin guardar otro estado en watchlist. `completed` es compatible con la interpretación actual de Recommendation. El listado no está paginado para conservar el contrato que utiliza ese servicio.
+
+### Progreso de películas y series
+
+Todas las rutas siguientes también se publican mediante el Gateway con JWT y `Cache-Control: private, no-store`.
+
+| Método y ruta | Respuesta |
+| --- | --- |
+| `GET /api/v1/library/progress` | `200 { "results": [...] }`, orden descendente de actualización; lista vacía si no hay registros. |
+| `PUT /api/v1/library/progress/:media_type/:tmdb_id` | `200`, crea o reemplaza estado y tiempos del contenido, conservando episodios existentes. |
+| `PUT /api/v1/library/progress/tv/:tmdb_id/episodes/:season/:episode` | `200`, registra un episodio visto sin duplicarlo; crea el progreso de la serie si no existía. |
+| `DELETE /api/v1/library/progress/tv/:tmdb_id/episodes/:season/:episode` | `204`, incluso si no existía; no elimina el progreso de la serie ni cambia su estado. |
+
+PUT de progreso requiere `Content-Type: application/json` y un cuerpo como:
+
+```json
+{ "status": "in_progress", "position_seconds": 120, "duration_seconds": 7200 }
+```
+
+`status` es obligatorio y admite `in_progress`, `completed`, `on_hold` o `dropped`. Los tiempos son enteros (posición desde 0, duración desde 1) o null. Campos omitidos se reemplazan por null, pues es un PUT. La posición no puede superar una duración informada. Solo las películas admiten tiempos; en series se usan episodios y se envía, por ejemplo, `{ "status": "on_hold" }`. El estado es explícito: no se deduce de los segundos ni de la cantidad de episodios.
+
+Cada respuesta de progreso contiene `tmdb_id`, `media_type`, `status`, `position_seconds`, `duration_seconds`, `updated_at` y `episodes`. Este último es una lista de `{ "season": 1, "episode": 2, "watched_at": "ISO" }`, ordenada por temporada y episodio. En películas es vacía. La temporada puede ser 0 (especiales) y el episodio empieza en 1. Se usan enteros hasta 2147483647; no se verifica su existencia contra TMDB. Marcar episodios no completa automáticamente la serie ni cambia un estado existente; repetir PUT conserva `watched_at`. Las rutas de episodios no requieren cuerpo, salvo un objeto JSON vacío opcional.
+
+Los estados y tiempos se validan antes de escribir. El cliente no envía usuario, identificadores internos ni fecha de visualización. Cada lectura, actualización y borrado filtra por el `sub` del JWT.
+
+Los errores responden `{ "error": "mensaje" }`: `400` por datos inválidos, `401` por token rechazado (con `WWW-Authenticate: Bearer`), `409` si falta el perfil relacionado, `413` por JSON demasiado grande, `415` por codificación no admitida y `503` por indisponibilidad de autenticación o almacenamiento. Un fallo de base de datos no expone credenciales ni errores SQL.
+
+### Ejecutar Library localmente
+
+Desde la raíz del repositorio, prepara un único archivo local `library-service/.env`, excluido de Git, con `DATABASE_URL`, `DIRECT_URL`, `SUPABASE_URL` y `SUPABASE_JWT_AUDIENCE=authenticated`. Los nombres y formatos generales están documentados en `.env.example`. Library debe usar el mismo proyecto y firma ES256 que el Gateway. `DIRECT_URL` se usa para las herramientas Prisma; el servidor exige `DATABASE_URL`.
+
+Con la migración de Esdras ya aplicada y el perfil del usuario disponible:
+
+```powershell
+npm ci --ignore-scripts
+node --env-file=library-service/.env ./node_modules/prisma/build/index.js generate --config ./library-service/prisma.config.ts
+npm run build
+node --env-file=library-service/.env dist/library-service/src/server.js
+```
+
+El perfil debe existir antes de agregar elementos. La migración de Esdras crea perfiles para usuarios nuevos; si se registraron antes, coordinar su preparación con el responsable de la base. Esta API no crea usuarios ni perfiles arbitrarios.
+
+En otra terminal:
+
+```powershell
+curl.exe -i http://127.0.0.1:3002/health/live
+curl.exe -i http://127.0.0.1:3002/api/v1/library/watchlist
+```
+
+La segunda consulta sin token debe devolver 401. Para probar operaciones con datos reales, usar un access token del proyecto y comprobar que dos usuarios no comparten resultados.
+
+### Verificar sin modificar Supabase
+
+Después de generar el cliente, `npm test` compila y ejecuta las pruebas existentes y `test/watchlist.test.mjs`. Esta última publica claves JWKS temporales y usa un almacenamiento simulado para probar autenticación, contrato, duplicados, aislamiento HTTP, validación y errores. `test/watchlist-store.test.mjs` verifica el filtrado por usuario y la transformación del estado en las consultas Prisma con un adaptador simulado. `test/gateway-library.test.mjs` prueba Gateway y Library juntos, incluyendo CORS, cuerpo, JWT y DELETE 204. Estas pruebas no verifican permisos RLS, la migración aplicada ni conectividad real con PostgreSQL/Supabase.
+
+`test/progress.test.mjs` cubre validación de estados/tiempos y el flujo HTTP Gateway → Library para películas, series y episodios, con aislamiento por usuario. La prueba opcional `test/library-postgres.test.mjs` requiere `LIBRARY_TEST_DATABASE_URL` y `LIBRARY_TEST_PROFILE_ID` (un perfil propio existente). Ejecuta los repositorios reales en una transacción que siempre revierte, sin dejar cambios persistidos. No crea usuarios ni aplica migraciones. Comprueba operaciones, unicidad, estado compartido y filtrado por usuario; no prueba el login OAuth ni políticas RLS con rol `authenticated`.
+
 ## Recommendation Service
 
 Genera recomendaciones personales por reglas a partir de la biblioteca del usuario (Library Service) y del catálogo de Media Service. Compose lo ejecuta en el puerto interno 3003, sin publicarlo al host, con los mismos límites de recursos y healthcheck de proceso que los demás servicios.
 
 El Gateway publica únicamente `GET /api/v1/recommendations`: valida el JWT, conserva la consulta y reenvía el Bearer verificado al servicio, que vuelve a autenticarlo. El timeout del Gateway es de 7 segundos. Para ejecutar fuera de Compose, configura `RECOMMENDATION_ORIGIN` en el Gateway (por ejemplo `http://127.0.0.1:3003`); sin esa variable la ruta autenticada responde 503.
 
-Compose requiere ahora `SUPABASE_URL`, además del token de TMDB. `LIBRARY_ORIGIN` apunta por defecto a `http://library-service:3002`, pero Library todavía no está implementado ni incluido en Compose. Hasta integrar Library, una consulta autenticada de recomendaciones responde 502; el healthcheck solo confirma que el proceso está vivo. `RECOMMENDATIONS_CACHE_TTL_MS` permite ajustar la caché desde `.env`.
+Compose requiere `SUPABASE_URL`, el token de TMDB y `DATABASE_URL`. Library está incluido y su origen interno es `http://library-service:3002`. Las recomendaciones todavía dependen de implementar favoritos: su 404 se convierte en 502, aunque watchlist y los healthchecks funcionen. `RECOMMENDATIONS_CACHE_TTL_MS` permite ajustar la caché desde el archivo de entorno seleccionado.
 
 | Variable | Uso |
 | --- | --- |

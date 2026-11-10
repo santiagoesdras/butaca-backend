@@ -20,6 +20,7 @@ services:
     environment:
       MEDIA_ORIGIN: http://media-service:3001
       RECOMMENDATION_ORIGIN: http://recommendation-service:3003
+      LIBRARY_ORIGIN: http://library-service:3002
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
@@ -27,6 +28,8 @@ services:
       media-service:
         condition: service_healthy
       recommendation-service:
+        condition: service_healthy
+      library-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -58,7 +61,7 @@ services:
       args: { SERVICE: recommendation-service }
     environment:
       MEDIA_ORIGIN: http://media-service:3001
-      LIBRARY_ORIGIN: ${LIBRARY_ORIGIN:-http://library-service:3002}
+      LIBRARY_ORIGIN: http://library-service:3002
       SUPABASE_URL: ${SUPABASE_URL:?Define SUPABASE_URL en .env}
       SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
       RECOMMENDATIONS_CACHE_TTL_MS: ${RECOMMENDATIONS_CACHE_TTL_MS:-120000}
@@ -66,8 +69,26 @@ services:
     depends_on:
       media-service:
         condition: service_healthy
+      library-service:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3003/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      start_interval: 2s
+      start_period: 10s
+      timeout: 5s
+
+  library-service:
+    <<: *runtime
+    build:
+      context: .
+      args: { SERVICE: library-service }
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Define DATABASE_URL en el archivo de entorno de Compose}
+      SUPABASE_URL: ${SUPABASE_URL:?Define SUPABASE_URL en el archivo de entorno de Compose}
+      SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       start_interval: 2s
       start_period: 10s
