@@ -5,6 +5,10 @@ import { only } from '../../shared/params.js';
 import type { MediaRef, WatchlistStore } from './watchlist.js';
 import { progressInput, type EpisodeRef, type ProgressStore } from './progress.js';
 import type { FavoriteStore } from './favorites.js';
+import type { ProfileStore } from './profiles.js';
+
+/** Dependencias opcionales de Library; se agregan sin cambiar los parámetros existentes. */
+export type LibraryExtras = { profiles?: ProfileStore };
 
 const base = '/api/v1/library';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -19,7 +23,7 @@ function reference(params: Record<string, unknown>): MediaRef {
 }
 
 export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseUrl' | 'audience'>, progress?: ProgressStore,
-  favorites?: FavoriteStore) {
+  favorites?: FavoriteStore, { profiles }: LibraryExtras = {}) {
   const authenticate = authenticator({ ...auth, algorithms: ['ES256'] });
   const app = service('library-service');
   app.use(base, async (req, res, next) => {
@@ -34,6 +38,13 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
       throw error;
     }
   });
+  // Antes de cualquier escritura se asegura el perfil del usuario verificado.
+  if (profiles) {
+    app.use(base, async (req, res, next) => {
+      if (req.method === 'PUT' || req.method === 'POST') await profiles.ensure(res.locals.user.id);
+      next();
+    });
+  }
   app.use(base, express.json({ limit: '1kb' }));
   app.use(base, (req, _res, next) => {
     only(req.query, []);
@@ -121,9 +132,12 @@ if (import.meta.main) {
   const { watchlistStore } = await import('./watchlist.js');
   const { progressStore } = await import('./progress.js');
   const { favoritesStore } = await import('./favorites.js');
+  const { profilesStore } = await import('./profiles.js');
   library(watchlistStore(prisma), {
     supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated'
-  }, progressStore(prisma), favoritesStore(prisma)).listen(3002, process.env.BIND_HOST ?? '127.0.0.1', () => {
+  }, progressStore(prisma), favoritesStore(prisma), {
+    profiles: profilesStore(prisma)
+  }).listen(3002, process.env.BIND_HOST ?? '127.0.0.1', () => {
     console.log(JSON.stringify({ service: 'library-service', event: 'listening', port: 3002 }));
   });
 }

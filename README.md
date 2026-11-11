@@ -35,7 +35,7 @@ Desde la raíz del repositorio, crea una copia local de `.env.example` llamada `
 | `CACHE_TTL_MS` | Vigencia de las respuestas de TMDB en caché, en milisegundos. Por defecto, 300000. |
 | `CACHE_MAX_ENTRIES` | Máximo de entradas en memoria por tipo de consulta. Por defecto, 64. |
 | `SUPABASE_URL` | URL del proyecto Supabase; requerida por los servicios privados. |
-| `DATABASE_URL` | Conexión PostgreSQL de Library. La migración y los perfiles deben existir previamente. |
+| `DATABASE_URL` | Conexión PostgreSQL de Library. La migración debe estar aplicada; los perfiles se crean automáticamente. |
 
 Con Docker y el complemento Compose disponibles, ejecuta:
 
@@ -244,13 +244,13 @@ Cada respuesta de progreso contiene `tmdb_id`, `media_type`, `status`, `position
 
 Los estados y tiempos se validan antes de escribir. El cliente no envía usuario, identificadores internos ni fecha de visualización. Cada lectura, actualización y borrado filtra por el `sub` del JWT.
 
-Los errores responden `{ "error": "mensaje" }`: `400` por datos inválidos, `401` por token rechazado (con `WWW-Authenticate: Bearer`), `409` si falta el perfil relacionado, `413` por JSON demasiado grande, `415` por codificación no admitida y `503` por indisponibilidad de autenticación o almacenamiento. Un fallo de base de datos no expone credenciales ni errores SQL.
+Los errores responden `{ "error": "mensaje" }`: `400` por datos inválidos, `401` por token rechazado (con `WWW-Authenticate: Bearer`), `409` ante un conflicto de datos, `413` por JSON demasiado grande, `415` por codificación no admitida y `503` por indisponibilidad de autenticación o almacenamiento. Un fallo de base de datos no expone credenciales ni errores SQL.
 
 ### Ejecutar Library localmente
 
 Desde la raíz del repositorio, prepara un único archivo local `library-service/.env`, excluido de Git, con `DATABASE_URL`, `DIRECT_URL`, `SUPABASE_URL` y `SUPABASE_JWT_AUDIENCE=authenticated`. Los nombres y formatos generales están documentados en `.env.example`. Library debe usar el mismo proyecto y firma ES256 que el Gateway. `DIRECT_URL` se usa para las herramientas Prisma; el servidor exige `DATABASE_URL`.
 
-Con la migración de Esdras ya aplicada y el perfil del usuario disponible:
+Con la migración de Esdras ya aplicada:
 
 ```powershell
 npm ci --ignore-scripts
@@ -259,7 +259,7 @@ npm run build
 node --env-file=library-service/.env dist/library-service/src/server.js
 ```
 
-El perfil debe existir antes de agregar elementos. La migración de Esdras crea perfiles para usuarios nuevos; si se registraron antes, coordinar su preparación con el responsable de la base. Esta API no crea usuarios ni perfiles arbitrarios.
+La migración de Esdras crea el perfil de los usuarios nuevos mediante el trigger `on_auth_user_created_butaca`. Para las cuentas registradas antes de aplicarla, Library también asegura el perfil en la primera escritura (PUT o POST), usando únicamente el `sub` verificado del JWT; las lecturas y los DELETE no crean perfiles. Si el perfil ya existe, no se modifica, y la llave foránea hacia `auth.users` impide crear perfiles de usuarios inexistentes. Los perfiles ya asegurados se recuerdan en memoria para no repetir la consulta. Esta API no crea usuarios de Supabase ni perfiles para otros identificadores.
 
 En otra terminal:
 
