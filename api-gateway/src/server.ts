@@ -81,6 +81,10 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
       if (response.status === 401) res.set('WWW-Authenticate', 'Bearer');
       const retry = response.headers.get('retry-after');
       if (retry && /^\d{1,9}$/.test(retry)) res.set('Retry-After', retry);
+      for (const name of ['ratelimit', 'ratelimit-policy']) {
+        const value = response.headers.get(name);
+        if (value && value.length <= 200) res.set(name, value);
+      }
       if (![200, 201, 400, 401, 403, 404, 409, 413, 415, 422, 429, 502, 503, 504].includes(response.status)) {
         throw new HttpFailure(502, 'Library Service no disponible');
       }
@@ -121,6 +125,9 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
   app.get(emotions + '/consent', (req, res) => relay(req, res, emotions + '/consent'));
   app.put(emotions + '/consent', body, (req, res) => relay(req, res, emotions + '/consent'));
   app.delete(emotions + '/consent', body, (req, res) => relay(req, res, emotions + '/consent'));
+  // Multipart se acepta solo en esta ruta; Library valida archivo, consentimiento y contenido real.
+  app.post(emotions + '/analyze', express.raw({ type: 'multipart/form-data', limit: '3mb' }),
+    (req, res) => relay(req, res, emotions + '/analyze', 8000));
   // La imagen viaja en base64 (hasta 2 MB decodificados); el análisis puede tardar más que una consulta.
   app.post(emotions + '/detections', express.raw({ type: () => true, limit: '3mb' }),
     (req, res) => relay(req, res, emotions + '/detections', 12000));
