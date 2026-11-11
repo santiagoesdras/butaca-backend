@@ -20,7 +20,7 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
   app.use(helmet());
   app.use(cors({
     origin: frontendOrigin,
-    methods: ['GET', 'PUT', 'DELETE'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Authorization', 'Content-Type'],
     // Sin esto el navegador oculta estos encabezados al frontend en peticiones entre orígenes.
     exposedHeaders: ['Retry-After', 'RateLimit', 'RateLimit-Policy']
@@ -30,7 +30,7 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
     message: { error: 'Demasiadas solicitudes' }
   }));
 
-  app.use(['/api/v1/library', '/api/v1/recommendations'], async (req, res, next) => {
+  app.use(['/api/v1/library', '/api/v1/emotions', '/api/v1/recommendations'], async (req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     if (!authenticate) throw new HttpFailure(503, 'Autenticación no configurada');
     try {
@@ -64,18 +64,14 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
   const watchlist = '/api/v1/library/watchlist';
   const progress = '/api/v1/library/progress';
   const favorites = '/api/v1/library/favorites';
-  const forwardLibrary = async (req: Request, res: express.Response) => {
+  // Reenvía a Library con el JWT verificado, conservando cuerpo, query y errores del cliente.
+  const relay = async (req: Request, res: express.Response, path: string, timeout = 7000) => {
     if (!libraryOrigin) throw new HttpFailure(503, 'Library Service no configurado');
-    const domain = [progress, favorites, watchlist].find(prefix => req.route.path.startsWith(prefix))!;
-    const episode = req.params.season !== undefined;
-    const path = req.method === 'GET' ? domain
-      : `${domain}/${episode ? 'tv' : segment(req.params.media_type)}/${segment(req.params.tmdb_id)}` +
-        (episode ? `/episodes/${segment(req.params.season)}/${segment(req.params.episode)}` : '');
     const url = new URL(path, libraryOrigin);
     url.search = new URL(req.originalUrl, 'http://gateway').search;
     const headers: Record<string, string> = { Authorization: 'Bearer ' + res.locals.user.token };
     if (req.get('content-type')) headers['Content-Type'] = req.get('content-type')!;
-    const signal = AbortSignal.timeout(7000);
+    const signal = AbortSignal.timeout(timeout);
     try {
       const response = await fetch(url, {
         method: req.method, headers, signal, redirect: 'error',
@@ -85,7 +81,7 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
       if (response.status === 401) res.set('WWW-Authenticate', 'Bearer');
       const retry = response.headers.get('retry-after');
       if (retry && /^\d{1,9}$/.test(retry)) res.set('Retry-After', retry);
-      if (![200, 400, 401, 403, 404, 409, 413, 415, 429, 503, 504].includes(response.status)) {
+      if (![200, 201, 400, 401, 403, 404, 409, 413, 415, 422, 429, 502, 503, 504].includes(response.status)) {
         throw new HttpFailure(502, 'Library Service no disponible');
       }
       res.status(response.status).json(await response.json());
@@ -94,6 +90,14 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
       throw new HttpFailure(signal.aborted ? 504 : 502,
         signal.aborted ? 'Tiempo de espera agotado' : 'Library Service no disponible');
     }
+  };
+  const forwardLibrary = (req: Request, res: express.Response) => {
+    const domain = [progress, favorites, watchlist].find(prefix => req.route.path.startsWith(prefix))!;
+    const episode = req.params.season !== undefined;
+    const path = req.method === 'GET' ? domain
+      : `${domain}/${episode ? 'tv' : segment(req.params.media_type)}/${segment(req.params.tmdb_id)}` +
+        (episode ? `/episodes/${segment(req.params.season)}/${segment(req.params.episode)}` : '');
+    return relay(req, res, path);
   };
   const body = express.raw({ type: () => true, limit: '1kb' });
   app.get(watchlist, forwardLibrary);
@@ -106,6 +110,24 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
   app.put(progress + '/:media_type/:tmdb_id', body, forwardLibrary);
   app.put(progress + '/tv/:tmdb_id/episodes/:season/:episode', body, forwardLibrary);
   app.delete(progress + '/tv/:tmdb_id/episodes/:season/:episode', body, forwardLibrary);
+
+  const emotions = '/api/v1/emotions';
+  const uuid = (value: unknown) => {
+    if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+      throw new HttpFailure(400, 'Ruta inválida');
+    }
+    return value;
+  };
+  app.get(emotions + '/consent', (req, res) => relay(req, res, emotions + '/consent'));
+  app.put(emotions + '/consent', body, (req, res) => relay(req, res, emotions + '/consent'));
+  app.delete(emotions + '/consent', body, (req, res) => relay(req, res, emotions + '/consent'));
+  // La imagen viaja en base64 (hasta 2 MB decodificados); el análisis puede tardar más que una consulta.
+  app.post(emotions + '/detections', express.raw({ type: () => true, limit: '3mb' }),
+    (req, res) => relay(req, res, emotions + '/detections', 12000));
+  app.get(emotions + '/history', (req, res) => relay(req, res, emotions + '/history'));
+  app.put(emotions + '/history/:id/recommendations/:media_type/:tmdb_id', express.raw({ type: () => true, limit: '8kb' }),
+    (req, res) => relay(req, res,
+      `${emotions}/history/${uuid(req.params.id)}/recommendations/${segment(req.params.media_type)}/${segment(req.params.tmdb_id)}`));
 
   app.get('/api/v1/recommendations', async (req, res) => {
     if (!recommendationOrigin) throw new HttpFailure(503, 'Recommendation Service no configurado');

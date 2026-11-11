@@ -87,6 +87,10 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Define DATABASE_URL en el archivo de entorno de Compose}
       SUPABASE_URL: ${SUPABASE_URL:?Define SUPABASE_URL en el archivo de entorno de Compose}
       SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
+      # Detección de emociones con AWS Rekognition; sin AWS_REGION la detección responde 503.
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
