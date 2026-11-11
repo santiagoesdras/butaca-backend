@@ -11,7 +11,7 @@ Esta copia incorpora watchlist, progreso y su integración con el Gateway. Los c
 | Favoritos | GET `/api/v1/library/favorites`, PUT/DELETE `/api/v1/library/favorites/:media_type/:tmdb_id`. JWT requerido, sin campos de usuario en la petición. |
 | Progreso | GET `/api/v1/library/progress`, PUT `/api/v1/library/progress/:media_type/:tmdb_id` y PUT/DELETE de episodios. JWT requerido. Cambios locales de esta entrega. |
 | Recomendaciones | Implementado. Consume favoritos, watchlist y progreso de Library con el token del usuario. No consume emociones. |
-| Análisis de cámara con AWS Rekognition | `POST /api/v1/emotions/detections` con consentimiento previo (`/api/v1/emotions/consent`). Requiere credenciales de AWS en el servidor; sin ellas responde 503. Contrato en [`docs/contrato-emociones.md`](docs/contrato-emociones.md). |
+| Análisis de cámara con AWS Rekognition | `POST /api/v1/emotions/analyze`: multipart con `image` y `consent=true`, máximo 2 MiB, sin persistencia y con confirmación requerida. Contrato en [`docs/contrato-emociones.md`](docs/contrato-emociones.md). |
 | Historial emocional | `GET /api/v1/emotions/history?period=7d|30d` o `?year=YYYY`, con las recomendaciones guardadas de cada día (`PUT /api/v1/emotions/history/:id/recommendations/:media_type/:tmdb_id`). |
 
 El esquema permite una detección por usuario y día: una nueva detección el mismo día reemplaza la anterior. La zona horaria la envía el frontend (`time_zone`) y los códigos de emociones son los del catálogo `library.moods`. Las decisiones que el equipo aún debe confirmar están al final de [`docs/contrato-emociones.md`](docs/contrato-emociones.md).
@@ -36,6 +36,9 @@ Desde la raíz del repositorio, crea una copia local de `.env.example` llamada `
 | `CACHE_MAX_ENTRIES` | Máximo de entradas en memoria por tipo de consulta. Por defecto, 64. |
 | `SUPABASE_URL` | URL del proyecto Supabase; requerida por los servicios privados. |
 | `DATABASE_URL` | Conexión PostgreSQL de Library. La migración debe estar aplicada; los perfiles se crean automáticamente. |
+| `AWS_REGION` | Región de Rekognition. Solo se inyecta a Library; el SDK usa la cadena estándar de credenciales. |
+| `EMOTION_MIN_CONFIDENCE` | Umbral de producto para sugerir una expresión. Por defecto, 30. |
+| `EMOTION_ANALYZE_LIMIT` | Análisis permitidos por usuario y ventana. Por defecto, 10 por minuto. |
 
 Con Docker y el complemento Compose disponibles, ejecuta:
 

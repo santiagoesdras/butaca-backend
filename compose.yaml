@@ -91,6 +91,11 @@ services:
       AWS_REGION: ${AWS_REGION:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      EMOTION_AWS_TIMEOUT_MS: ${EMOTION_AWS_TIMEOUT_MS:-5000}
+      EMOTION_MIN_CONFIDENCE: ${EMOTION_MIN_CONFIDENCE:-30}
+      EMOTION_ANALYZE_LIMIT: ${EMOTION_ANALYZE_LIMIT:-10}
+      EMOTION_ANALYZE_WINDOW_MS: ${EMOTION_ANALYZE_WINDOW_MS:-60000}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

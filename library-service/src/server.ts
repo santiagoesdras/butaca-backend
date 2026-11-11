@@ -1,6 +1,6 @@
 import express, { type ErrorRequestHandler } from 'express';
 import { authenticator, type AuthConfig } from '../../shared/auth.js';
-import { finish, HttpFailure, service } from '../../shared/http.js';
+import { finish, HttpFailure, positiveInt, service } from '../../shared/http.js';
 import { only } from '../../shared/params.js';
 import type { MediaRef, WatchlistStore } from './watchlist.js';
 import { progressInput, type EpisodeRef, type ProgressStore } from './progress.js';
@@ -44,7 +44,8 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
   // Antes de cualquier escritura se asegura el perfil del usuario verificado.
   if (profiles) {
     app.use(privateBases, async (req, res, next) => {
-      if (req.method === 'PUT' || req.method === 'POST') await profiles.ensure(res.locals.user.id);
+      const statelessAnalysis = req.method === 'POST' && req.originalUrl.split('?')[0] === emotionsBase + '/analyze';
+      if (!statelessAnalysis && (req.method === 'PUT' || req.method === 'POST')) await profiles.ensure(res.locals.user.id);
       next();
     });
   }
@@ -140,13 +141,23 @@ if (import.meta.main) {
   const { profilesStore } = await import('./profiles.js');
   const { emotionStore } = await import('./emotions.js');
   const { rekognitionDetector } = await import('./detector.js');
-  // Sin AWS_REGION la detección responde 503; consentimiento e historial siguen disponibles.
+  // Sin AWS_REGION el análisis responde 503; las demás rutas siguen disponibles.
   const region = process.env.AWS_REGION;
+  const minConfidence = positiveInt('EMOTION_MIN_CONFIDENCE', 30);
+  if (minConfidence > 100) throw new Error('Configuración inválida: EMOTION_MIN_CONFIDENCE');
   library(watchlistStore(prisma), {
     supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated'
   }, progressStore(prisma), favoritesStore(prisma), {
     profiles: profilesStore(prisma),
-    emotions: { store: emotionStore(prisma), detector: region ? rekognitionDetector(region) : undefined }
+    emotions: {
+      store: emotionStore(prisma),
+      detector: region ? rekognitionDetector(region, positiveInt('EMOTION_AWS_TIMEOUT_MS', 5000)) : undefined,
+      analyze: {
+        minConfidence,
+        limit: positiveInt('EMOTION_ANALYZE_LIMIT', 10),
+        windowMs: positiveInt('EMOTION_ANALYZE_WINDOW_MS', 60000)
+      }
+    }
   }).listen(3002, process.env.BIND_HOST ?? '127.0.0.1', () => {
     console.log(JSON.stringify({ service: 'library-service', event: 'listening', port: 3002 }));
   });

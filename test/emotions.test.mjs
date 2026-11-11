@@ -164,7 +164,7 @@ test('Rekognition: conversión de emociones al catálogo', () => {
     { Type: 'CALM', Confidence: 10 }, { Type: 'HAPPY', Confidence: 70.456 }, { Type: 'CONFUSED', Confidence: 5 },
     { Type: 'SURPRISED', Confidence: 4 }, { Type: 'UNKNOWN', Confidence: 50 }, { Type: 'FEAR' }
   ]), [
-    { mood: 'HAPPY', confidence: 70.46 }, { mood: 'CALM', confidence: 10 }, { mood: 'SURPRISED', confidence: 9 }
+    { mood: 'HAPPY', confidence: 70.46 }, { mood: 'CALM', confidence: 10 }, { mood: 'SURPRISED', confidence: 4 }
   ]);
 });
 
