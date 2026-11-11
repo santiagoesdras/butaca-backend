@@ -4,6 +4,7 @@ import { finish, HttpFailure, service } from '../../shared/http.js';
 import { only } from '../../shared/params.js';
 import type { MediaRef, WatchlistStore } from './watchlist.js';
 import { progressInput, type EpisodeRef, type ProgressStore } from './progress.js';
+import type { FavoriteStore } from './favorites.js';
 
 const base = '/api/v1/library';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -17,7 +18,8 @@ function reference(params: Record<string, unknown>): MediaRef {
   return { media_type, tmdb_id: Number(tmdb_id) };
 }
 
-export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseUrl' | 'audience'>, progress?: ProgressStore) {
+export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseUrl' | 'audience'>, progress?: ProgressStore,
+  favorites?: FavoriteStore) {
   const authenticate = authenticator({ ...auth, algorithms: ['ES256'] });
   const app = service('library-service');
   app.use(base, async (req, res, next) => {
@@ -56,6 +58,19 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
     res.status(204).end();
   });
 
+  if (favorites) {
+    app.get(base + '/favorites', emptyBody, async (_req, res) => {
+      res.json({ results: await favorites.list(res.locals.user.id) });
+    });
+    app.put(base + '/favorites/:media_type/:tmdb_id', emptyBody, async (req, res) => {
+      res.json(await favorites.add(res.locals.user.id, reference(req.params)));
+    });
+    app.delete(base + '/favorites/:media_type/:tmdb_id', emptyBody, async (req, res) => {
+      await favorites.remove(res.locals.user.id, reference(req.params));
+      res.status(204).end();
+    });
+  }
+
   if (progress) {
     const episodeRef = (params: Record<string, unknown>): EpisodeRef => {
       const number = (value: unknown, minimum: number) => {
@@ -90,7 +105,7 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
     if (type === 'entity.parse.failed') return next(new HttpFailure(400, 'JSON inválido'));
     if (type === 'charset.unsupported' || type === 'encoding.unsupported') return next(new HttpFailure(415, 'Formato no admitido'));
     if (code === 'P2003') return next(new HttpFailure(409, 'El perfil del usuario no está preparado en Library'));
-    if (code === 'P2002') return next(new HttpFailure(409, 'El elemento ya existe; vuelve a consultar la watchlist'));
+    if (code === 'P2002') return next(new HttpFailure(409, 'El elemento ya existe; vuelve a consultar la lista'));
     console.error(JSON.stringify({ service: 'library-service', event: 'watchlist_failed' }));
     next(new HttpFailure(503, 'Library no disponible'));
   };
@@ -105,9 +120,10 @@ if (import.meta.main) {
   const { prisma } = await import('./db.js');
   const { watchlistStore } = await import('./watchlist.js');
   const { progressStore } = await import('./progress.js');
+  const { favoritesStore } = await import('./favorites.js');
   library(watchlistStore(prisma), {
     supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated'
-  }, progressStore(prisma)).listen(3002, process.env.BIND_HOST ?? '127.0.0.1', () => {
+  }, progressStore(prisma), favoritesStore(prisma)).listen(3002, process.env.BIND_HOST ?? '127.0.0.1', () => {
     console.log(JSON.stringify({ service: 'library-service', event: 'listening', port: 3002 }));
   });
 }

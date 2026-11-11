@@ -8,9 +8,9 @@ Esta copia incorpora watchlist, progreso y su integración con el Gateway. Los c
 | --- | --- |
 | Media: tendencias, búsqueda, populares, géneros y detalles | Implementado. Rutas públicas `/api/v1/media/*`, documentadas abajo. |
 | Watchlist | GET `/api/v1/library/watchlist`, PUT/DELETE `/api/v1/library/watchlist/:media_type/:tmdb_id`. JWT requerido, sin campos de usuario en la petición. Cambios locales de esta entrega. |
-| Favoritos | Modelo y migración disponibles; API pendiente en esta copia. |
+| Favoritos | GET `/api/v1/library/favorites`, PUT/DELETE `/api/v1/library/favorites/:media_type/:tmdb_id`. JWT requerido, sin campos de usuario en la petición. |
 | Progreso | GET `/api/v1/library/progress`, PUT `/api/v1/library/progress/:media_type/:tmdb_id` y PUT/DELETE de episodios. JWT requerido. Cambios locales de esta entrega. |
-| Recomendaciones | Endpoint implementado, pero necesita las APIs de favoritos y watchlist de Library para funcionar con datos reales. No consume emociones. |
+| Recomendaciones | Implementado. Consume favoritos, watchlist y progreso de Library con el token del usuario. No consume emociones. |
 | Análisis de cámara con AWS Rekognition | Pendiente: no existe endpoint de captura ni integración AWS en este código. Método, formato, límite, consentimiento y respuesta deben acordarse antes de integrar el frontend. |
 | Historial emocional | Tablas disponibles, API pendiente. La propuesta `GET /api/v1/history?period=7d|30d|year` no es una ruta implementada. |
 
@@ -184,11 +184,11 @@ Media Service guarda cada respuesta en una caché LRU en memoria durante `CACHE_
 
 Datos suministrados por [TMDB](https://developer.themoviedb.org/reference/intro/getting-started). Este producto usa la API de TMDB, pero no está respaldado ni certificado por TMDB.
 
-## Library Service: watchlist y progreso
+## Library Service: favoritos, watchlist y progreso
 
-Library escucha en `127.0.0.1:3002` por defecto (`BIND_HOST` permite cambiar la interfaz). Esta entrega añade watchlist, progreso y su integración con Gateway/Compose; no implementa favoritos. Reutiliza el esquema y la migración integrados en el PR #18; no requiere otra migración. No llama a TMDB. En Compose escucha internamente en `0.0.0.0:3002`, sin publicar ese puerto al host.
+Library escucha en `127.0.0.1:3002` por defecto (`BIND_HOST` permite cambiar la interfaz). Implementa favoritos, watchlist, progreso y su integración con Gateway/Compose. Reutiliza el esquema y la migración integrados en el PR #18; no requiere otra migración. No llama a TMDB. En Compose escucha internamente en `0.0.0.0:3002`, sin publicar ese puerto al host.
 
-El Gateway reenvía únicamente las rutas de watchlist y progreso documentadas abajo y el JWT verificado. Conserva errores y respuestas DELETE sin cuerpo. Permite preflight CORS para GET, PUT y DELETE con Authorization y Content-Type, para el origen configurado. En ejecución local fuera de Docker, configurar `LIBRARY_ORIGIN=http://127.0.0.1:3002` en el Gateway; sin origen las rutas autenticadas responden 503. En Compose el origen se configura automáticamente. No expone rutas internas ni la salud de Library a través de un proxy genérico.
+El Gateway reenvía únicamente las rutas de favoritos, watchlist y progreso documentadas abajo y el JWT verificado. Conserva errores y respuestas DELETE sin cuerpo. Permite preflight CORS para GET, PUT y DELETE con Authorization y Content-Type, para el origen configurado. En ejecución local fuera de Docker, configurar `LIBRARY_ORIGIN=http://127.0.0.1:3002` en el Gateway; sin origen las rutas autenticadas responden 503. En Compose el origen se configura automáticamente. No expone rutas internas ni la salud de Library a través de un proxy genérico.
 
 Las rutas `/api/v1/library/*` verifican JWT ES256 de Supabase mediante `shared/auth.ts` (firma, emisor, audiencia, expiración y `sub` UUID). Cada consulta filtra por el usuario verificado; no se aceptan identificadores de usuario desde la petición. Las respuestas privadas incluyen `Cache-Control: private, no-store`.
 
@@ -198,10 +198,15 @@ Las rutas `/api/v1/library/*` verifican JWT ES256 de Supabase mediante `shared/a
 | `GET /api/v1/library/watchlist` | `200 { "results": [...] }`, orden descendente de creación. |
 | `PUT /api/v1/library/watchlist/:media_type/:tmdb_id` | `200`, agrega o devuelve el elemento existente sin cambiar su fecha. |
 | `DELETE /api/v1/library/watchlist/:media_type/:tmdb_id` | `204`, incluso si no existía; no borra el progreso. |
+| `GET /api/v1/library/favorites` | `200 { "results": [...] }`, orden descendente de creación. |
+| `PUT /api/v1/library/favorites/:media_type/:tmdb_id` | `200`, agrega o devuelve el favorito existente sin cambiar su fecha. |
+| `DELETE /api/v1/library/favorites/:media_type/:tmdb_id` | `204`, incluso si no existía. |
 
 `media_type` debe ser exactamente `movie` o `tv`; `tmdb_id` es un entero de 1 a 2147483647, sin ceros iniciales. No se admiten parámetros de consulta. PUT y DELETE no necesitan cuerpo; solo se permite un objeto JSON vacío si se envía alguno. El límite JSON es 1 KiB. Enviar siempre `Authorization: Bearer <access_token>`.
 
-Un elemento tiene este formato (no expone el identificador del usuario):
+Las reglas de `media_type`, `tmdb_id` y cuerpo aplican igual a favoritos y watchlist.
+
+Un elemento de watchlist tiene este formato (no expone el identificador del usuario):
 
 ```json
 {
@@ -211,6 +216,8 @@ Un elemento tiene este formato (no expone el identificador del usuario):
   "status": "pending"
 }
 ```
+
+Un favorito tiene el mismo formato, sin `status`: `{ "tmdb_id": 42, "media_type": "movie", "created_at": "2026-11-10T00:00:00.000Z" }`. Favoritos y watchlist son listas independientes: agregar o quitar de una no modifica la otra. Como en watchlist, la respuesta no incluye título ni póster; el frontend los obtiene de Media.
 
 `status` se deriva del registro existente en `Progress`: `in_progress`, `completed`, `on_hold` o `dropped`. Sin progreso es `pending`. Se actualiza mediante los endpoints de progreso, sin guardar otro estado en watchlist. `completed` es compatible con la interpretación actual de Recommendation. El listado no está paginado para conservar el contrato que utiliza ese servicio.
 
@@ -275,7 +282,7 @@ Genera recomendaciones personales por reglas a partir de la biblioteca del usuar
 
 El Gateway publica únicamente `GET /api/v1/recommendations`: valida el JWT, conserva la consulta y reenvía el Bearer verificado al servicio, que vuelve a autenticarlo. El timeout del Gateway es de 7 segundos. Para ejecutar fuera de Compose, configura `RECOMMENDATION_ORIGIN` en el Gateway (por ejemplo `http://127.0.0.1:3003`); sin esa variable la ruta autenticada responde 503.
 
-Compose requiere `SUPABASE_URL`, el token de TMDB y `DATABASE_URL`. Library está incluido y su origen interno es `http://library-service:3002`. Las recomendaciones todavía dependen de implementar favoritos: su 404 se convierte en 502, aunque watchlist y los healthchecks funcionen. `RECOMMENDATIONS_CACHE_TTL_MS` permite ajustar la caché desde el archivo de entorno seleccionado.
+Compose requiere `SUPABASE_URL`, el token de TMDB y `DATABASE_URL`. Library está incluido y su origen interno es `http://library-service:3002`. `RECOMMENDATIONS_CACHE_TTL_MS` permite ajustar la caché desde el archivo de entorno seleccionado.
 
 | Variable | Uso |
 | --- | --- |
@@ -328,6 +335,6 @@ Cada resultado se guarda en una caché temporal por usuario (clave: `sub` verifi
 | 503 | No fue posible obtener las claves públicas de Supabase. |
 | 504 | Venció el tiempo de espera de un servicio. |
 
-### Contrato pendiente con Library Service
+### Contrato con Library Service
 
-Mientras Library define sus rutas, Recommendation Service supone que expone `GET /api/v1/library/favorites`, `/watchlist` y `/progress`, autenticadas con el mismo Bearer token y que responden una lista (o `{ "results": [...] }`) de elementos con `tmdb_id` y `media_type`. Un elemento se considera visto si `completed` es `true` o si `status` es `watched`, `completed`, `finished`, `seen`, `visto` o `terminado`. Favoritos y watchlist son obligatorios: si alguna de esas rutas responde 404, la consulta falla con 502 para no confundir una integración incompleta con una biblioteca vacía ni recomendar contenido ya visto. Progreso es la única ruta opcional mientras se implementa (`OPTIONAL_LISTS`): su 404 se trata como lista vacía. Si el contrato final difiere, solo hay que ajustar `recommendation-service/src/sources.ts`.
+Recommendation Service consulta `GET /api/v1/library/favorites`, `/watchlist` y `/progress` con el mismo Bearer token. Cada una responde `{ "results": [...] }` con elementos que incluyen `tmdb_id` y `media_type`. Un elemento se considera visto cuando su `status` es `completed`, tanto en watchlist como en progreso (también se aceptan `completed: true` y otros sinónimos como `watched`). Favoritos y watchlist son obligatorios: si alguna de esas rutas responde 404, la consulta falla con 502 para no confundir una integración incompleta con una biblioteca vacía ni recomendar contenido ya visto. Progreso sigue marcado como opcional (`OPTIONAL_LISTS`): su 404 se trata como lista vacía. Ya está implementado, así que puede volverse obligatorio cuando el equipo lo decida. Si el contrato final difiere, solo hay que ajustar `recommendation-service/src/sources.ts`.
