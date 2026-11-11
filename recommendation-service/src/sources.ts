@@ -15,6 +15,14 @@ export type Library = Record<'favorites' | 'watchlist' | 'progress', LibraryItem
 
 export const key = (ref: Ref) => ref.media_type + ':' + ref.id;
 
+/** Tiempo de espera fijo o calculado en cada llamada (por ejemplo, lo que queda del presupuesto). */
+export type Timeout = number | (() => number);
+const ms = (timeout: Timeout) => {
+  const value = typeof timeout === 'function' ? timeout() : timeout;
+  if (value <= 0) throw new HttpFailure(504, 'Tiempo de espera agotado');
+  return value;
+};
+
 // ───────────── Library Service ─────────────
 // Contrato supuesto mientras se define Library: GET /api/v1/library/{favorites|watchlist|progress}
 // con el mismo Bearer token, que responde una lista o { results: [...] } de elementos
@@ -42,11 +50,11 @@ function items(raw: unknown): LibraryItem[] {
  */
 export const OPTIONAL_LISTS: ReadonlySet<keyof Library> = new Set(['progress']);
 
-export function library(origin: string, timeout: number) {
+export function library(origin: string, timeout: Timeout) {
   const list = async (name: keyof Library, token: string) => {
     let raw: unknown;
     try {
-      raw = await upstream(new URL('/api/v1/library/' + name, origin), timeout, { Authorization: 'Bearer ' + token });
+      raw = await upstream(new URL('/api/v1/library/' + name, origin), ms(timeout), { Authorization: 'Bearer ' + token });
     } catch (error) {
       if (error instanceof HttpFailure && error.status === 404) {
         if (OPTIONAL_LISTS.has(name)) return [];
@@ -82,12 +90,12 @@ function summary(item: unknown): Summary {
   };
 }
 
-export function media(origin: string, timeout: number) {
+export function media(origin: string, timeout: Timeout) {
   const get = async (path: string, params: Record<string, string>) => {
     const url = new URL('/api/v1/media' + path, origin);
     for (const [name, value] of Object.entries(params)) url.searchParams.set(name, value);
     try {
-      return await upstream(url, timeout);
+      return await upstream(url, ms(timeout));
     } catch (error) {
       if (error instanceof HttpFailure && [404, 429, 504].includes(error.status)) throw error;
       throw new HttpFailure(502, 'Media Service no disponible');

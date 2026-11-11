@@ -1,6 +1,7 @@
+import { MOOD_AVOID, MOOD_GENRES, type Mood } from './moods.js';
 import { key, type Library, type Ref, type Summary } from './sources.js';
 
-export type Reason = 'genres' | 'trending' | 'popular' | 'top_rated';
+export type Reason = 'genres' | 'mood' | 'trending' | 'popular' | 'top_rated';
 export type Recommendation = Summary & { score: number; reasons: Reason[] };
 
 /** Pesos de las señales del usuario sobre sus géneros preferidos. */
@@ -36,13 +37,18 @@ export function seeds(library: Library): (Ref & { weight: number })[] {
  * 2. Afinidad: suma de los pesos normalizados de los géneros del candidato que coinciden con los del usuario.
  * 3. Se combinan afinidad, posición en populares, calificación y presencia en tendencias.
  *    Sin señales del usuario (arranque en frío) solo cuentan popularidad, calificación y tendencias.
+ * 4. Con una emoción, se suma la coincidencia con sus géneros (MOOD_GENRES) y pesa más que el historial.
+ *    Los géneros de MOOD_AVOID reducen la puntuación a la mitad (por ejemplo, terror con miedo).
  */
 export function rank(input: {
   seeds: { weight: number; genres: number[] }[];
   excluded: Set<string>;
   trending: Summary[];
   popular: Summary[][];
+  mood?: Mood;
 }): Recommendation[] {
+  const moodGenres = new Set<number>(input.mood ? expand([...MOOD_GENRES[input.mood]]) : []);
+  const avoided = new Set<number>(input.mood ? expand([...(MOOD_AVOID[input.mood] ?? [])]) : []);
   const weights = new Map<number, number>();
   for (const seed of input.seeds) {
     for (const genre of expand(seed.genres)) weights.set(genre, (weights.get(genre) ?? 0) + seed.weight);
@@ -67,10 +73,20 @@ export function rank(input: {
     const matched = genres.reduce((sum, genre) => sum + (weights.get(genre) ?? 0) / top, 0);
     const affinity = personal && item.genre_ids.length ? Math.min(1, matched / Math.sqrt(item.genre_ids.length)) : 0;
     const rating = (item.vote_average ?? 5) / 10;
-    const score = personal
-      ? 0.6 * affinity + 0.15 * popularity + 0.15 * rating + 0.1 * Number(trending)
-      : 0.45 * popularity + 0.35 * rating + 0.2 * Number(trending);
+    // Fracción de los géneros del candidato que corresponden a la emoción (0 sin emoción).
+    const moodMatch = genres.length ? genres.filter(genre => moodGenres.has(genre)).length / genres.length : 0;
+    const avoid = genres.some(genre => avoided.has(genre));
+    const mood = avoid ? 0 : Math.min(1, moodMatch * 2);
+    const trend = Number(trending);
+    const score = (avoid ? 0.5 : 1) * (input.mood
+      ? (personal
+        ? 0.45 * mood + 0.3 * affinity + 0.1 * popularity + 0.1 * rating + 0.05 * trend
+        : 0.55 * mood + 0.2 * popularity + 0.15 * rating + 0.1 * trend)
+      : (personal
+        ? 0.6 * affinity + 0.15 * popularity + 0.15 * rating + 0.1 * trend
+        : 0.45 * popularity + 0.35 * rating + 0.2 * trend));
     const reasons: Reason[] = [];
+    if (mood > 0) reasons.push('mood');
     if (affinity > 0) reasons.push('genres');
     if (trending) reasons.push('trending');
     if (popular) reasons.push('popular');
