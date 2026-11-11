@@ -6,11 +6,14 @@ import type { MediaRef, WatchlistStore } from './watchlist.js';
 import { progressInput, type EpisodeRef, type ProgressStore } from './progress.js';
 import type { FavoriteStore } from './favorites.js';
 import type { ProfileStore } from './profiles.js';
+import { emotionsBase, emotionRoutes, type EmotionDeps } from './emotion-routes.js';
 
 /** Dependencias opcionales de Library; se agregan sin cambiar los parámetros existentes. */
-export type LibraryExtras = { profiles?: ProfileStore };
+export type LibraryExtras = { profiles?: ProfileStore; emotions?: EmotionDeps };
 
 const base = '/api/v1/library';
+// Dominios privados: requieren JWT y aseguran el perfil antes de escribir.
+const privateBases = [base, emotionsBase];
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function reference(params: Record<string, unknown>): MediaRef {
@@ -23,10 +26,10 @@ function reference(params: Record<string, unknown>): MediaRef {
 }
 
 export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseUrl' | 'audience'>, progress?: ProgressStore,
-  favorites?: FavoriteStore, { profiles }: LibraryExtras = {}) {
+  favorites?: FavoriteStore, { profiles, emotions }: LibraryExtras = {}) {
   const authenticate = authenticator({ ...auth, algorithms: ['ES256'] });
   const app = service('library-service');
-  app.use(base, async (req, res, next) => {
+  app.use(privateBases, async (req, res, next) => {
     res.set('Cache-Control', 'private, no-store');
     try {
       const user = await authenticate(req.get('authorization'));
@@ -40,7 +43,7 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
   });
   // Antes de cualquier escritura se asegura el perfil del usuario verificado.
   if (profiles) {
-    app.use(base, async (req, res, next) => {
+    app.use(privateBases, async (req, res, next) => {
       if (req.method === 'PUT' || req.method === 'POST') await profiles.ensure(res.locals.user.id);
       next();
     });
@@ -108,6 +111,8 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
     });
   }
 
+  if (emotions) emotionRoutes(app, emotions);
+
   const errors: ErrorRequestHandler = (error: unknown, _req, _res, next) => {
     if (error instanceof HttpFailure) return next(error);
     const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
@@ -133,10 +138,15 @@ if (import.meta.main) {
   const { progressStore } = await import('./progress.js');
   const { favoritesStore } = await import('./favorites.js');
   const { profilesStore } = await import('./profiles.js');
+  const { emotionStore } = await import('./emotions.js');
+  const { rekognitionDetector } = await import('./detector.js');
+  // Sin AWS_REGION la detección responde 503; consentimiento e historial siguen disponibles.
+  const region = process.env.AWS_REGION;
   library(watchlistStore(prisma), {
     supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated'
   }, progressStore(prisma), favoritesStore(prisma), {
-    profiles: profilesStore(prisma)
+    profiles: profilesStore(prisma),
+    emotions: { store: emotionStore(prisma), detector: region ? rekognitionDetector(region) : undefined }
   }).listen(3002, process.env.BIND_HOST ?? '127.0.0.1', () => {
     console.log(JSON.stringify({ service: 'library-service', event: 'listening', port: 3002 }));
   });

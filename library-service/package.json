@@ -3,10 +3,11 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@aws-sdk/client-rekognition": "^3.1166.0",
     "@prisma/adapter-pg": "^7.10.1",
     "@prisma/client": "^7.10.1",
-    "pg": "^8.23.1",
     "express": "^5.1.0",
-    "jose": "^6.2.16"
+    "jose": "^6.2.16",
+    "pg": "^8.23.1"
   }
 }
