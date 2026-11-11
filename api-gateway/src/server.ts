@@ -57,9 +57,10 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
 
   const watchlist = '/api/v1/library/watchlist';
   const progress = '/api/v1/library/progress';
+  const favorites = '/api/v1/library/favorites';
   const forwardLibrary = async (req: Request, res: express.Response) => {
     if (!libraryOrigin) throw new HttpFailure(503, 'Library Service no configurado');
-    const domain = req.route.path.startsWith(progress) ? progress : watchlist;
+    const domain = [progress, favorites, watchlist].find(prefix => req.route.path.startsWith(prefix))!;
     const episode = req.params.season !== undefined;
     const path = req.method === 'GET' ? domain
       : `${domain}/${episode ? 'tv' : segment(req.params.media_type)}/${segment(req.params.tmdb_id)}` +
@@ -92,6 +93,9 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
   app.get(watchlist, forwardLibrary);
   app.put(watchlist + '/:media_type/:tmdb_id', body, forwardLibrary);
   app.delete(watchlist + '/:media_type/:tmdb_id', body, forwardLibrary);
+  app.get(favorites, forwardLibrary);
+  app.put(favorites + '/:media_type/:tmdb_id', body, forwardLibrary);
+  app.delete(favorites + '/:media_type/:tmdb_id', body, forwardLibrary);
   app.get(progress, forwardLibrary);
   app.put(progress + '/:media_type/:tmdb_id', body, forwardLibrary);
   app.put(progress + '/tv/:tmdb_id/episodes/:season/:episode', body, forwardLibrary);
