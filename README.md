@@ -285,6 +285,7 @@ Compose requiere `SUPABASE_URL`, el token de TMDB y `DATABASE_URL`. Library est�
 | `MEDIA_ORIGIN` | Media Service. Por defecto, `http://127.0.0.1:3001`. |
 | `LIBRARY_ORIGIN` | Library Service. Por defecto, `http://127.0.0.1:3002`. |
 | `RECOMMENDATIONS_CACHE_TTL_MS` | Vigencia de las recomendaciones de cada usuario. Por defecto, 120000. |
+| `RECOMMENDATIONS_BUDGET_MS` | Tiempo total para calcular una recomendación. Por defecto, 6000; debe ser menor que la espera del Gateway (7 s). |
 
 ### `GET /api/v1/recommendations`
 
@@ -294,6 +295,7 @@ Requiere `Authorization: Bearer <access_token>` de Supabase. Se verifican firma,
 | --- | --- | --- |
 | `media_type` | No | `all` (predeterminado), `movie` o `tv`. |
 | `limit` | No | Entero de 1 a 40. Predeterminado 20. |
+| `mood` | No | Emoción actual: `HAPPY`, `SAD`, `ANGRY`, `FEAR`, `DISGUSTED`, `SURPRISED` o `CALM` (los códigos del catálogo `library.moods`, en mayúsculas). |
 | `language` | No | `es-MX` por defecto. |
 
 ```json
@@ -305,11 +307,12 @@ Requiere `Authorization: Bearer <access_token>` de Supabase. Se verifican firma,
       "score": 0.812, "reasons": ["genres", "trending", "popular"]
     }
   ],
+  "mood": null,
   "based_on": { "favorites": 3, "watchlist": 5, "progress": 1 }
 }
 ```
 
-`reasons` puede contener `genres` (coincide con los géneros del usuario), `trending`, `popular` y `top_rated` (calificación de 7,5 o más). Si `based_on` está en cero, el usuario todavía no tiene señales y se devuelven títulos populares y en tendencia. La respuesta lleva `Cache-Control: private, no-store`.
+`mood` repite la emoción solicitada, o `null` si no se envió. `reasons` puede contener `mood` (coincide con los géneros de la emoción), `genres` (coincide con los géneros del usuario), `trending`, `popular` y `top_rated` (calificación de 7,5 o más). Si `based_on` está en cero, el usuario todavía no tiene señales y se devuelven títulos populares y en tendencia. La respuesta lleva `Cache-Control: private, no-store`.
 
 Reglas:
 
@@ -317,8 +320,11 @@ Reglas:
 2. Los candidatos son las dos primeras páginas de populares de cada tipo y las tendencias del día.
 3. Se excluye todo lo que ya está en la biblioteca del usuario, incluido el contenido visto.
 4. La puntuación combina afinidad de géneros (60 %), posición en populares (15 %), calificación (15 %) y tendencia (10 %). Sin señales del usuario se usan solo popularidad (45 %), calificación (35 %) y tendencia (20 %).
+5. Con `mood`, la coincidencia con los géneros de esa emoción pesa más: 45 % con historial (afinidad 30 %, popularidad 10 %, calificación 10 %, tendencia 5 %) o 55 % sin historial (popularidad 20 %, calificación 15 %, tendencia 10 %). Con emociones negativas se busca aligerar el ánimo: por ejemplo, con `SAD` se priorizan comedia, familia y animación, y con `FEAR` se evita el terror. Los géneros a evitar (`MOOD_AVOID`) reducen la puntuación a la mitad. Las tablas están en `recommendation-service/src/moods.ts` y pueden ajustarse sin cambiar el contrato.
 
-Cada resultado se guarda en una caché temporal por usuario (clave: `sub` verificado, tipo e idioma), por lo que los cambios en la biblioteca se reflejan cuando vence `RECOMMENDATIONS_CACHE_TTL_MS`.
+El cálculo tiene un presupuesto total de `RECOMMENDATIONS_BUDGET_MS`: cada llamada a Media o Library espera como máximo lo que queda, y si se agota responde 504 antes que el Gateway. Los géneros de los títulos de la biblioteca se piden apenas responde Library, en paralelo con populares y tendencias. Si falla o tarda el detalle de un título, se omite esa señal en lugar de fallar toda la recomendación. Con TMDB real y 20 títulos en la biblioteca, el cálculo sin caché tardó alrededor de 1 s.
+
+Cada resultado se guarda en una caché temporal por usuario (clave: `sub` verificado, tipo, idioma y emoción), por lo que los cambios en la biblioteca se reflejan cuando vence `RECOMMENDATIONS_CACHE_TTL_MS`.
 
 | HTTP | Significado |
 | --- | --- |
