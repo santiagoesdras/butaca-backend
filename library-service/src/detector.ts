@@ -1,24 +1,31 @@
-import { DetectFacesCommand, RekognitionClient } from '@aws-sdk/client-rekognition';
+import { DetectFacesCommand, RekognitionClient, type DetectFacesCommandOutput } from '@aws-sdk/client-rekognition';
 import { HttpFailure } from '../../shared/http.js';
 import { DEFAULT_MOODS, type MoodCode } from './constants/moods.js';
 
 export type MoodScore = { mood: MoodCode; confidence: number };
-export type Detection = { faces: number; scores: MoodScore[] };
+export type Detection = {
+  faces: number;
+  scores: MoodScore[];
+  /** Categoría principal de AWS cuando no pertenece al catálogo de Butaca. */
+  unsupportedTop?: string;
+};
 
 export interface EmotionDetector {
   /** Analiza una imagen JPEG o PNG y devuelve las emociones del rostro principal, de mayor a menor confianza. */
   detect(image: Uint8Array): Promise<Detection>;
 }
 
+export interface RekognitionSender {
+  send(command: DetectFacesCommand, options: { abortSignal: AbortSignal }): Promise<DetectFacesCommandOutput>;
+}
+
 const CODES = new Set<string>(DEFAULT_MOODS.map(mood => mood.code));
-// Rekognition también devuelve CONFUSED, que no está en el catálogo: se suma a SURPRISED. UNKNOWN se descarta.
-const ALIASES: Record<string, MoodCode> = { CONFUSED: 'SURPRISED' };
 
 /** Convierte las emociones de Rekognition a los códigos de library.moods, con confianza de 0 a 100. */
 export function toScores(emotions: { Type?: string; Confidence?: number }[]): MoodScore[] {
   const totals = new Map<MoodCode, number>();
   for (const { Type, Confidence } of emotions) {
-    const code = Type && (ALIASES[Type] ?? (CODES.has(Type) ? Type as MoodCode : undefined));
+    const code = Type && CODES.has(Type) ? Type as MoodCode : undefined;
     if (!code || typeof Confidence !== 'number' || !Number.isFinite(Confidence)) continue;
     totals.set(code, Math.min(100, (totals.get(code) ?? 0) + Confidence));
   }
@@ -28,11 +35,11 @@ export function toScores(emotions: { Type?: string; Confidence?: number }[]): Mo
 
 /**
  * Detector con AWS Rekognition (DetectFaces con el atributo EMOTIONS). Las credenciales se toman de la
- * cadena estándar de AWS (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY y AWS_REGION) y nunca llegan al cliente.
+ * cadena estándar de AWS (roles, perfiles o variables, incluidas credenciales temporales) y nunca llegan al cliente.
  * La imagen solo se envía a Rekognition; no se guarda.
  */
-export function rekognitionDetector(region: string, timeout = 5000): EmotionDetector {
-  const client = new RekognitionClient({ region, maxAttempts: 2 });
+export function rekognitionDetector(region: string, timeout = 5000,
+  client: RekognitionSender = new RekognitionClient({ region, maxAttempts: 2 })): EmotionDetector {
   return {
     async detect(image) {
       const signal = AbortSignal.timeout(timeout);
@@ -42,7 +49,13 @@ export function rekognitionDetector(region: string, timeout = 5000): EmotionDete
         // Con varios rostros se analiza el de mayor tamaño en la imagen.
         const area = (face: (typeof faces)[number]) => (face.BoundingBox?.Width ?? 0) * (face.BoundingBox?.Height ?? 0);
         const main = [...faces].sort((a, b) => area(b) - area(a))[0];
-        return { faces: faces.length, scores: main ? toScores(main.Emotions ?? []) : [] };
+        const emotions = [...(main?.Emotions ?? [])].sort((a, b) => (b.Confidence ?? -1) - (a.Confidence ?? -1));
+        const top = emotions[0]?.Type;
+        return {
+          faces: faces.length,
+          scores: toScores(emotions),
+          unsupportedTop: top && !CODES.has(top) ? top : undefined
+        };
       } catch (error) {
         if (signal.aborted) throw new HttpFailure(504, 'El análisis de emociones tardó demasiado');
         const name = typeof error === 'object' && error !== null && 'name' in error ? error.name : '';
