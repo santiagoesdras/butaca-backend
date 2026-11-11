@@ -65,7 +65,7 @@ Configura `SUPABASE_URL` con la URL del proyecto y `SUPABASE_JWT_AUDIENCE` con `
 
 El Gateway verifica tokens ES256 usando las claves públicas de `SUPABASE_URL/auth/v1/.well-known/jwks.json`. Comprueba firma, emisor (`SUPABASE_URL/auth/v1`), audiencia, expiración y sujeto. El validador compartido se reutiliza en Recommendation Service, que conserva sus opciones de autenticación existentes.
 
-Las solicitudes a `/api/v1/library` y `/api/v1/recommendations`, incluidas sus subrutas, requieren `Authorization: Bearer <access_token>`. Los endpoints de Media y salud son públicos. El preflight CORS se procesa antes de la autenticación.
+Las solicitudes a `/api/v1/library` y `/api/v1/recommendations`, incluidas sus subrutas, requieren `Authorization: Bearer <access_token>`. Los endpoints de Media y salud son públicos. El preflight CORS se procesa antes de la autenticación. CORS expone al frontend `Retry-After`, `RateLimit` y `RateLimit-Policy`, para que pueda esperar el plazo indicado tras un 429.
 
 | Respuesta | Significado |
 | --- | --- |

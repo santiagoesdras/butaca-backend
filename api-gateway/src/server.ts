@@ -18,7 +18,13 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
   const authenticate = auth ? authenticator({ ...auth, algorithms: ['ES256'] }) : undefined;
   const app = service('api-gateway');
   app.use(helmet());
-  app.use(cors({ origin: frontendOrigin, methods: ['GET', 'PUT', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type'] }));
+  app.use(cors({
+    origin: frontendOrigin,
+    methods: ['GET', 'PUT', 'DELETE'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+    // Sin esto el navegador oculta estos encabezados al frontend en peticiones entre orígenes.
+    exposedHeaders: ['Retry-After', 'RateLimit', 'RateLimit-Policy']
+  }));
   app.use('/api', rateLimit({
     windowMs: 60000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false,
     message: { error: 'Demasiadas solicitudes' }
