@@ -1,8 +1,13 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
+import { z } from 'zod';
 import { HttpFailure } from '../../shared/http.js';
+import { parse } from '../../shared/validate.js';
 import { DEFAULT_MOODS, type MoodCode } from './constants/moods.js';
 import type { MoodScore } from './detector.js';
 import { toApiMediaType, toPrismaMediaType, type ApiMediaType } from './dtos/media.dto.js';
+
+/** Registro de la emoción confirmada por el usuario para su día local. */
+export type RecordInput = { date: Date; detectedAt: Date; mood: MoodCode; scores: MoodScore[]; source: 'AWS_REKOGNITION' | 'USER_SELECTED' };
 
 export type Consent = { granted: boolean; policy_version: string | null; granted_at: string | null };
 
@@ -18,7 +23,10 @@ export type HistoryEntry = {
   date: string;
   mood: MoodCode;
   name: string;
-  confidence: number;
+  /** Confianza del análisis (0 a 100) o null si el usuario eligió la emoción sin análisis. */
+  confidence: number | null;
+  /** AWS_REKOGNITION: emoción sugerida por el análisis y confirmada; USER_SELECTED: elegida por el usuario. */
+  source: string;
   scores: MoodScore[];
   detected_at: string;
   recommendations: SavedRecommendation[];
@@ -31,7 +39,7 @@ export interface EmotionStore {
   timeZone(profileId: string): Promise<string>;
   setTimeZone(profileId: string, timeZone: string): Promise<void>;
   /** Guarda la detección del día; si ya había una ese día, la reemplaza (una por usuario y día). */
-  record(profileId: string, input: { date: Date; detectedAt: Date; scores: MoodScore[] }): Promise<{ entry: HistoryEntry; replaced: boolean }>;
+  record(profileId: string, input: RecordInput): Promise<{ entry: HistoryEntry; replaced: boolean }>;
   history(profileId: string, from: Date, to: Date): Promise<HistoryEntry[]>;
   saveRecommendation(profileId: string, historyId: string, ref: { tmdb_id: number; media_type: ApiMediaType },
     input: RecommendationInput): Promise<SavedRecommendation>;
@@ -42,34 +50,26 @@ const day = (date: Date) => date.toISOString().slice(0, 10);
 
 // ───────── Validación del cuerpo de una recomendación guardada ─────────
 
+const genreMessage = 'genre_ids debe ser una lista de hasta 20 enteros positivos';
+const nullableText = (name: string, max: number) =>
+  z.string({ error: `${name} debe ser texto de hasta ${max} caracteres o null` })
+    .max(max, `${name} debe ser texto de hasta ${max} caracteres o null`).nullish().transform(value => value ?? null);
+
+export const recommendationSchema = z.strictObject({
+  title: z.string({ error: 'title es obligatorio' }).max(255, 'title debe ser texto de hasta 255 caracteres o null').trim()
+    .min(1, 'title es obligatorio'),
+  poster_path: nullableText('poster_path', 500),
+  overview: nullableText('overview', 4000),
+  release_date: z.string({ error: 'release_date debe tener formato YYYY-MM-DD' }).regex(/^\d{4}-\d{2}-\d{2}$/,'release_date debe tener formato YYYY-MM-DD')
+    .nullish().transform(value => value ?? null),
+  vote_average: z.number({ error: 'vote_average debe ser un número de 0 a 10 o null' }).min(0, 'vote_average debe ser un número de 0 a 10 o null')
+    .max(10, 'vote_average debe ser un número de 0 a 10 o null').nullish().transform(value => value === null || value === undefined ? null : Math.round(value * 10) / 10),
+  genre_ids: z.array(z.number({ error: genreMessage }).int(genreMessage).min(1, genreMessage).max(2147483647, genreMessage), { error: genreMessage })
+    .max(20, genreMessage).default([])
+}, { error: issue => issue.code === 'unrecognized_keys' ? 'Campos no admitidos: ' + issue.keys.join(', ') : 'Se requiere un objeto JSON' });
+
 export function recommendationInput(body: unknown): RecommendationInput {
-  const invalid = (message: string) => new HttpFailure(400, message);
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw invalid('Se requiere un objeto JSON');
-  const values = body as Record<string, unknown>;
-  const allowed = ['title', 'poster_path', 'overview', 'release_date', 'vote_average', 'genre_ids'];
-  const unknown = Object.keys(values).filter(key => !allowed.includes(key));
-  if (unknown.length) throw invalid('Campos no admitidos: ' + unknown.join(', '));
-  const text = (name: string, max: number) => {
-    const value = values[name] ?? null;
-    if (value !== null && (typeof value !== 'string' || value.length > max)) throw invalid(`${name} debe ser texto de hasta ${max} caracteres o null`);
-    return value as string | null;
-  };
-  const title = text('title', 255);
-  if (!title || !title.trim()) throw invalid('title es obligatorio');
-  const release = text('release_date', 10);
-  if (release !== null && !/^\d{4}-\d{2}-\d{2}$/.test(release)) throw invalid('release_date debe tener formato YYYY-MM-DD');
-  const vote = values.vote_average ?? null;
-  if (vote !== null && (typeof vote !== 'number' || !Number.isFinite(vote) || vote < 0 || vote > 10)) {
-    throw invalid('vote_average debe ser un número de 0 a 10 o null');
-  }
-  const genres = values.genre_ids ?? [];
-  if (!Array.isArray(genres) || genres.length > 20 || !genres.every(id => Number.isSafeInteger(id) && id > 0 && id <= 2147483647)) {
-    throw invalid('genre_ids debe ser una lista de hasta 20 enteros positivos');
-  }
-  return {
-    title: title.trim(), poster_path: text('poster_path', 500), overview: text('overview', 4000), release_date: release,
-    vote_average: vote === null ? null : Math.round(vote * 10) / 10, genre_ids: genres as number[]
-  };
+  return parse(recommendationSchema, body);
 }
 
 // ───────── Implementación con Prisma ─────────
@@ -87,7 +87,7 @@ const saved = (row: SavedRow): SavedRecommendation => ({
 });
 
 type HistoryRow = {
-  id: string; detectionDate: Date; detectedAt: Date; primaryMoodCode: string;
+  id: string; detectionDate: Date; detectedAt: Date; primaryMoodCode: string; source: string;
   scores: { moodCode: string; confidence: { toString(): string } }[];
   savedRecommendations: SavedRow[];
 };
@@ -96,7 +96,7 @@ const entry = (row: HistoryRow): HistoryEntry => {
     .sort((a, b) => b.confidence - a.confidence);
   return {
     id: row.id, date: day(row.detectionDate), mood: row.primaryMoodCode as MoodCode, name: NAMES.get(row.primaryMoodCode) ?? row.primaryMoodCode,
-    confidence: scores.find(score => score.mood === row.primaryMoodCode)?.confidence ?? 0, scores,
+    confidence: scores.find(score => score.mood === row.primaryMoodCode)?.confidence ?? null, source: row.source, scores,
     detected_at: row.detectedAt.toISOString(), recommendations: row.savedRecommendations.map(saved)
   };
 };
@@ -131,20 +131,21 @@ export function emotionStore(db: Db): EmotionStore {
     async setTimeZone(profileId, timeZone) {
       await db.profile.updateMany({ where: { id: profileId }, data: { timeZone } });
     },
-    async record(profileId, { date, detectedAt, scores }) {
-      const primary = scores[0]!;
+    async record(profileId, { date, detectedAt, mood, scores, source }) {
       return db.$transaction(async tx => {
         const existing = await tx.moodHistory.findUnique({
           where: { profileId_detectionDate: { profileId, detectionDate: date } }, select: { id: true }
         });
-        const data = { primaryMoodCode: primary.mood, detectedAt, source: 'AWS_REKOGNITION' };
+        const data = { primaryMoodCode: mood, detectedAt, source };
         const history = existing
           ? await tx.moodHistory.update({ where: { id: existing.id }, data, select: { id: true } })
           : await tx.moodHistory.create({ data: { ...data, profileId, detectionDate: date }, select: { id: true } });
         if (existing) await tx.moodHistoryScore.deleteMany({ where: { moodHistoryId: history.id } });
-        await tx.moodHistoryScore.createMany({
-          data: scores.map(score => ({ moodHistoryId: history.id, moodCode: score.mood, confidence: score.confidence }))
-        });
+        if (scores.length) {
+          await tx.moodHistoryScore.createMany({
+            data: scores.map(score => ({ moodHistoryId: history.id, moodCode: score.mood, confidence: score.confidence }))
+          });
+        }
         const row = await tx.moodHistory.findFirstOrThrow({ where: { id: history.id, profileId }, include });
         return { entry: entry(row), replaced: !!existing };
       });

@@ -1,5 +1,6 @@
 import { LRUCache } from 'lru-cache';
-import { finish, positiveInt, service } from '../../shared/http.js';
+import { bindHost, envInteger, httpUrl, loadConfig, optionalText, positiveInteger } from '../../shared/config.js';
+import { finish, service } from '../../shared/http.js';
 import { choice, language, limit, only, type MediaType } from '../../shared/params.js';
 import { authenticator, type AuthConfig } from '../../shared/auth.js';
 import { rank, seeds, type Recommendation } from './engine.js';
@@ -26,7 +27,7 @@ type Result = {
 };
 
 export function recommendations({ mediaOrigin, libraryOrigin, auth, timeout = 5000,
-  budget = positiveInt('RECOMMENDATIONS_BUDGET_MS', 6000) }: Config) {
+  budget = envInteger('RECOMMENDATIONS_BUDGET_MS', 6000) }: Config) {
   const authenticate = authenticator(auth);
 
   const compute = async (type: MediaType | 'all', lang: string, mood: Mood | null, token: string): Promise<Result> => {
@@ -68,8 +69,8 @@ export function recommendations({ mediaOrigin, libraryOrigin, auth, timeout = 50
 
   // Caché temporal por usuario: la clave usa el `sub` verificado, nunca el token.
   const cache = new LRUCache<string, Result, string>({
-    ttl: positiveInt('RECOMMENDATIONS_CACHE_TTL_MS', 120000),
-    max: positiveInt('CACHE_MAX_ENTRIES', 64) * 4,
+    ttl: envInteger('RECOMMENDATIONS_CACHE_TTL_MS', 120000),
+    max: envInteger('CACHE_MAX_ENTRIES', 64) * 4,
     ttlAutopurge: true,
     fetchMethod: (cacheKey, _stale, { context }) => {
       const { type, language: lang, mood } = JSON.parse(cacheKey) as { type: MediaType | 'all'; language: string; mood: Mood | null };
@@ -93,15 +94,21 @@ export function recommendations({ mediaOrigin, libraryOrigin, auth, timeout = 50
 }
 
 if (import.meta.main) {
-  const supabaseUrl = process.env.SUPABASE_URL ?? '';
-  if (!/^https?:\/\//.test(supabaseUrl)) throw new Error('Se requiere SUPABASE_URL');
+  const config = loadConfig({
+    SUPABASE_URL: httpUrl(),
+    SUPABASE_JWT_AUDIENCE: optionalText,
+    SUPABASE_JWT_SECRET: optionalText,
+    MEDIA_ORIGIN: httpUrl('http://127.0.0.1:3001'),
+    LIBRARY_ORIGIN: httpUrl('http://127.0.0.1:3002'),
+    RECOMMENDATIONS_BUDGET_MS: positiveInteger(6000),
+    RECOMMENDATIONS_CACHE_TTL_MS: positiveInteger(120000),
+    CACHE_MAX_ENTRIES: positiveInteger(64),
+    BIND_HOST: bindHost
+  });
   recommendations({
-    mediaOrigin: process.env.MEDIA_ORIGIN ?? 'http://127.0.0.1:3001',
-    libraryOrigin: process.env.LIBRARY_ORIGIN ?? 'http://127.0.0.1:3002',
-    auth: {
-      supabaseUrl,
-      audience: process.env.SUPABASE_JWT_AUDIENCE || undefined,
-      jwtSecret: process.env.SUPABASE_JWT_SECRET || undefined
-    }
-  }).listen(3003, process.env.BIND_HOST ?? '127.0.0.1');
+    mediaOrigin: config.MEDIA_ORIGIN,
+    libraryOrigin: config.LIBRARY_ORIGIN,
+    budget: config.RECOMMENDATIONS_BUDGET_MS,
+    auth: { supabaseUrl: config.SUPABASE_URL, audience: config.SUPABASE_JWT_AUDIENCE, jwtSecret: config.SUPABASE_JWT_SECRET }
+  }).listen(3003, config.BIND_HOST);
 }

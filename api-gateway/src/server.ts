@@ -4,14 +4,15 @@ import { rateLimit } from 'express-rate-limit';
 import express, { type ErrorRequestHandler, type Request } from 'express';
 import { finish, HttpFailure, service, upstream } from '../../shared/http.js';
 import { authenticator, type AuthConfig } from '../../shared/auth.js';
+import { bindHost, httpUrl, loadConfig, optionalHttpUrl, textWithDefault } from '../../shared/config.js';
+import { parse } from '../../shared/validate.js';
+import { z } from 'zod';
 
 const media = '/api/v1/media';
 
 // Evita que segmentos como `..` alteren la ruta interna; Media valida el valor exacto.
-function segment(value: unknown) {
-  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,32}$/.test(value)) throw new HttpFailure(400, 'Ruta inválida');
-  return value;
-}
+const segmentSchema = z.string({ error: 'Ruta inválida' }).regex(/^[A-Za-z0-9_-]{1,32}$/, 'Ruta inválida');
+const segment = (value: unknown) => parse(segmentSchema, value);
 
 export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick<AuthConfig, 'supabaseUrl' | 'audience'>,
   recommendationOrigin?: string, recommendationTimeout = 7000, libraryOrigin?: string) {
@@ -116,22 +117,17 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
   app.delete(progress + '/tv/:tmdb_id/episodes/:season/:episode', body, forwardLibrary);
 
   const emotions = '/api/v1/emotions';
-  const uuid = (value: unknown) => {
-    if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
-      throw new HttpFailure(400, 'Ruta inválida');
-    }
-    return value;
-  };
+  const uuid = (value: unknown) => parse(z.uuid({ error: 'Ruta inválida' }), value);
   app.get(emotions + '/consent', (req, res) => relay(req, res, emotions + '/consent'));
   app.put(emotions + '/consent', body, (req, res) => relay(req, res, emotions + '/consent'));
   app.delete(emotions + '/consent', body, (req, res) => relay(req, res, emotions + '/consent'));
   // Multipart se acepta solo en esta ruta; Library valida archivo, consentimiento y contenido real.
   app.post(emotions + '/analyze', express.raw({ type: 'multipart/form-data', limit: '3mb' }),
     (req, res) => relay(req, res, emotions + '/analyze', 8000));
-  // La imagen viaja en base64 (hasta 2 MB decodificados); el análisis puede tardar más que una consulta.
-  app.post(emotions + '/detections', express.raw({ type: () => true, limit: '3mb' }),
-    (req, res) => relay(req, res, emotions + '/detections', 12000));
+  // Registro de la emoción confirmada: JSON pequeño, sin imagen.
+  app.post(emotions + '/history', body, (req, res) => relay(req, res, emotions + '/history'));
   app.get(emotions + '/history', (req, res) => relay(req, res, emotions + '/history'));
+  app.get(emotions + '/summary', (req, res) => relay(req, res, emotions + '/summary'));
   app.put(emotions + '/history/:id/recommendations/:media_type/:tmdb_id', express.raw({ type: () => true, limit: '8kb' }),
     (req, res) => relay(req, res,
       `${emotions}/history/${uuid(req.params.id)}/recommendations/${segment(req.params.media_type)}/${segment(req.params.tmdb_id)}`));
@@ -163,14 +159,23 @@ export function gateway(mediaOrigin: string, frontendOrigin: string, auth?: Pick
 }
 
 if (import.meta.main) {
-  const supabaseUrl = process.env.SUPABASE_URL;
+  const config = loadConfig({
+    MEDIA_ORIGIN: httpUrl('http://127.0.0.1:3001'),
+    FRONTEND_ORIGIN: httpUrl('http://localhost:5173'),
+    // Sin SUPABASE_URL las rutas privadas responden 503; las públicas siguen disponibles.
+    SUPABASE_URL: optionalHttpUrl,
+    SUPABASE_JWT_AUDIENCE: textWithDefault('authenticated'),
+    RECOMMENDATION_ORIGIN: optionalHttpUrl,
+    LIBRARY_ORIGIN: optionalHttpUrl,
+    BIND_HOST: bindHost
+  });
   gateway(
-    process.env.MEDIA_ORIGIN ?? 'http://127.0.0.1:3001',
-    process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173',
-    supabaseUrl ? { supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated' } : undefined,
-    process.env.RECOMMENDATION_ORIGIN,
+    config.MEDIA_ORIGIN,
+    config.FRONTEND_ORIGIN,
+    config.SUPABASE_URL ? { supabaseUrl: config.SUPABASE_URL, audience: config.SUPABASE_JWT_AUDIENCE } : undefined,
+    config.RECOMMENDATION_ORIGIN,
     7000,
-    process.env.LIBRARY_ORIGIN
+    config.LIBRARY_ORIGIN
   )
-    .listen(8080, process.env.BIND_HOST ?? '127.0.0.1');
+    .listen(8080, config.BIND_HOST);
 }

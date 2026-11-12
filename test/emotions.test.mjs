@@ -10,8 +10,6 @@ import { listen } from './helpers.mjs';
 
 const alice = '11111111-1111-4111-8111-111111111111';
 const bob = '22222222-2222-4222-8222-222222222222';
-const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 1)]).toString('base64');
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(200, 2)]).toString('base64');
 const NAMES = { HAPPY: 'Felicidad', SAD: 'Tristeza', ANGRY: 'Enojo', FEAR: 'Miedo', DISGUSTED: 'Desagrado', SURPRISED: 'Sorpresa', CALM: 'Neutralidad / calma' };
 
 // Almacén en memoria con el mismo contrato que el de Prisma: un registro por usuario y día.
@@ -26,12 +24,12 @@ function memoryStore() {
     async revoke(user) { consents.delete(user); },
     async timeZone(user) { return zones.get(user) ?? 'UTC'; },
     async setTimeZone(user, zone) { zones.set(user, zone); },
-    async record(user, { date, detectedAt, scores }) {
+    async record(user, { date, detectedAt, mood, scores, source }) {
       const key = user + ':' + date.toISOString().slice(0, 10);
       const replaced = days.has(key);
       const id = replaced ? days.get(key).id : `00000000-0000-4000-8000-${String(++next).padStart(12, '0')}`;
-      const row = { id, user, date: date.toISOString().slice(0, 10), mood: scores[0].mood, name: NAMES[scores[0].mood],
-        confidence: scores[0].confidence, scores, detected_at: detectedAt.toISOString() };
+      const row = { id, user, date: date.toISOString().slice(0, 10), mood, name: NAMES[mood],
+        confidence: scores.find(score => score.mood === mood)?.confidence ?? null, source, scores, detected_at: detectedAt.toISOString() };
       days.set(key, row);
       return { entry: entry(row), replaced };
     },
@@ -42,7 +40,7 @@ function memoryStore() {
     async saveRecommendation(user, id, ref, input) {
       const row = [...days.values()].find(item => item.id === id && item.user === user);
       if (!row) throw new HttpFailure(404, 'Registro de emoción no encontrado');
-      const item = { ...ref, ...input, saved_at: '2026-11-10T00:00:00.000Z' };
+      const item = { ...ref, ...input, saved_at: new Date().toISOString() };
       if (!saved.has(id)) saved.set(id, new Map());
       saved.get(id).set(ref.media_type + ':' + ref.tmdb_id, item);
       return item;
@@ -50,7 +48,7 @@ function memoryStore() {
   };
 }
 
-test('Emociones: consentimiento, detección, historial y recomendaciones guardadas', async t => {
+test('Emociones: consentimiento, emoción confirmada, historial, resumen y recomendaciones guardadas', async t => {
   const { publicKey, privateKey } = await generateKeyPair('ES256');
   const jwk = { ...await exportJWK(publicKey), kid: 'emotions', alg: 'ES256' };
   const issuer = await listen(t, (_req, res) => res.end(JSON.stringify({ keys: [jwk] })));
@@ -59,73 +57,70 @@ test('Emociones: consentimiento, detección, historial y recomendaciones guardad
   const auth = { supabaseUrl: issuer };
 
   const store = memoryStore();
-  let detection = { faces: 1, scores: [{ mood: 'SAD', confidence: 91.2 }, { mood: 'CALM', confidence: 6.1 }] };
-  const images = [];
-  const detector = { async detect(image) { images.push(image); return detection; } };
   const profiles = { ensured: [], async ensure(id) { this.ensured.push(id); } };
   const watchlist = { async list() { return []; }, async add() { return {}; }, async remove() {} };
-  const internal = await listen(t, library(watchlist, auth, undefined, undefined, { profiles, emotions: { store, detector } }));
+  const internal = await listen(t, library(watchlist, auth, undefined, undefined, { profiles, emotions: { store } }));
   const frontend = 'http://localhost:5173';
   const base = await listen(t, gateway('http://127.0.0.1:9', frontend, auth, undefined, 7000, internal));
   const headers = { Authorization: 'Bearer ' + await sign(alice), 'Content-Type': 'application/json' };
   const bobHeaders = { Authorization: 'Bearer ' + await sign(bob), 'Content-Type': 'application/json' };
   const api = base + '/api/v1/emotions';
-  const detect = (body, h = headers) => fetch(api + '/detections', { method: 'POST', headers: h, body: JSON.stringify(body) });
+  const confirm = (body, h = headers) => fetch(api + '/history', { method: 'POST', headers: h, body: JSON.stringify(body) });
 
   // Autenticación y CORS para POST.
   assert.equal((await fetch(api + '/history')).status, 401);
-  const preflight = await fetch(api + '/detections', { method: 'OPTIONS', headers: {
+  assert.equal((await fetch(api + '/summary')).status, 401);
+  const preflight = await fetch(api + '/history', { method: 'OPTIONS', headers: {
     Origin: frontend, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'authorization,content-type' } });
   assert.match(preflight.headers.get('access-control-allow-methods'), /POST/);
 
-  // Sin consentimiento no se analiza ninguna imagen.
+  // La ruta que recibía la foto por segunda vez ya no existe: la imagen solo pasa por /analyze.
+  assert.equal((await fetch(api + '/detections', { method: 'POST', headers, body: '{}' })).status, 404);
+
+  // Sin consentimiento no se registra ninguna emoción.
   assert.deepEqual(await (await fetch(api + '/consent', { headers })).json(), { granted: false, policy_version: null, granted_at: null });
-  const denied = await detect({ image: JPEG });
-  assert.equal(denied.status, 403);
-  assert.equal(images.length, 0);
+  assert.equal((await confirm({ mood: 'SAD', confidence: 91.2 })).status, 403);
   assert.equal((await fetch(api + '/consent', { method: 'PUT', headers, body: '{}' })).status, 400);
   const granted = await fetch(api + '/consent', { method: 'PUT', headers, body: JSON.stringify({ policy_version: '2026-11' }) });
   assert.equal(granted.status, 200);
   assert.equal((await granted.json()).granted, true);
 
-  // Validación de la imagen y del cuerpo, antes de llamar al proveedor.
+  // Validación con Zod: emoción del catálogo, confianza 0-100, zona IANA y sin campos extra (ni imagen).
   const cases = [
-    [{}, 400], [{ image: 'no es base64!' }, 415], [{ image: Buffer.from('texto plano').toString('base64') }, 415],
-    [{ image: JPEG, user_id: bob }, 400], [{ image: JPEG, time_zone: 'Marte/Base' }, 400],
-    [{ image: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(2.1 * 1024 * 1024)]).toString('base64') }, 413]
+    [{}, /mood/], [{ mood: 'fearful' }, /mood/], [{ mood: 'FEAR', confidence: 101 }, /confidence/],
+    [{ mood: 'FEAR', time_zone: 'Marte/Base' }, /time_zone/], [{ mood: 'FEAR', user_id: bob }, /Campos no admitidos: user_id/],
+    [{ mood: 'FEAR', image: 'abc' }, /Campos no admitidos: image/]
   ];
-  for (const [body, status] of cases) assert.equal((await detect(body)).status, status, JSON.stringify(body).slice(0, 60));
-  assert.equal(images.length, 0);
-
-  // Sin rostro o con poca confianza no se registra nada.
-  detection = { faces: 0, scores: [] };
-  assert.equal((await detect({ image: JPEG })).status, 422);
-  detection = { faces: 1, scores: [{ mood: 'HAPPY', confidence: 21 }] };
-  assert.equal((await detect({ image: PNG })).status, 422);
+  for (const [body, message] of cases) {
+    const response = await confirm(body);
+    assert.equal(response.status, 400, JSON.stringify(body));
+    assert.match((await response.json()).error, message);
+  }
+  assert.equal((await fetch(api + '/history', { method: 'POST', headers, body: JSON.stringify({ mood: 'SAD', note: 'x'.repeat(1100) }) })).status, 413);
   assert.equal(store.days.size, 0);
 
-  // Detección válida: 201, código del catálogo, día local según la zona enviada.
-  detection = { faces: 2, scores: [{ mood: 'SAD', confidence: 91.2 }, { mood: 'CALM', confidence: 6.1 }] };
-  const created = await detect({ image: 'data:image/jpeg;base64,' + JPEG, time_zone: 'America/Guatemala' });
+  // Emoción sugerida por /analyze y confirmada: 201, conserva la confianza y el día local del usuario.
+  const created = await confirm({ mood: 'SAD', confidence: 91.2, time_zone: 'America/Guatemala' });
   assert.equal(created.status, 201);
   const first = await created.json();
   assert.equal(first.mood, 'SAD');
   assert.equal(first.name, 'Tristeza');
   assert.equal(first.confidence, 91.2);
-  assert.equal(first.faces, 2);
+  assert.equal(first.source, 'AWS_REKOGNITION');
   assert.equal(first.replaced, false);
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Guatemala' }).format(new Date());
   assert.equal(first.date, today);
   assert.deepEqual(profiles.ensured.at(-1), alice, 'POST asegura el perfil');
 
-  // Una segunda detección el mismo día reemplaza la anterior (un registro por usuario y día).
-  detection = { faces: 1, scores: [{ mood: 'HAPPY', confidence: 88 }] };
-  const second = await detect({ image: JPEG });
+  // Confirmar otra emoción el mismo día reemplaza el registro (uno por usuario y día). Sin confianza = elegida.
+  const second = await confirm({ mood: 'CALM' });
   assert.equal(second.status, 200);
   const replaced = await second.json();
   assert.equal(replaced.replaced, true);
   assert.equal(replaced.id, first.id);
-  assert.equal(replaced.mood, 'HAPPY');
+  assert.equal(replaced.mood, 'CALM');
+  assert.equal(replaced.confidence, null);
+  assert.equal(replaced.source, 'USER_SELECTED');
 
   // Recomendación guardada para ese registro; aparece en el historial.
   const recPath = `${api}/history/${first.id}/recommendations/movie/354912`;
@@ -133,15 +128,18 @@ test('Emociones: consentimiento, detección, historial y recomendaciones guardad
   const savedRec = await fetch(recPath, { method: 'PUT', headers, body: JSON.stringify(rec) });
   assert.equal(savedRec.status, 200);
   assert.equal((await savedRec.json()).title, 'Coco');
-  for (const body of [{}, { title: 'x', extra: 1 }, { title: 'x', vote_average: 11 }, { title: 'x', release_date: '2017' }]) {
-    assert.equal((await fetch(recPath, { method: 'PUT', headers, body: JSON.stringify(body) })).status, 400, JSON.stringify(body));
+  for (const [body, message] of [[{}, /title/], [{ title: 'x', extra: 1 }, /extra/], [{ title: 'x', vote_average: 11 }, /vote_average/],
+    [{ title: 'x', release_date: '2017' }, /release_date/], [{ title: 'x', genre_ids: [0] }, /genre_ids/]]) {
+    const response = await fetch(recPath, { method: 'PUT', headers, body: JSON.stringify(body) });
+    assert.equal(response.status, 400, JSON.stringify(body));
+    assert.match((await response.json()).error, message);
   }
   assert.equal((await fetch(recPath, { method: 'PUT', headers: bobHeaders, body: JSON.stringify(rec) })).status, 404, 'no se puede usar el registro de otro usuario');
   assert.equal((await fetch(`${api}/history/no-es-uuid/recommendations/movie/1`, { method: 'PUT', headers, body: '{}' })).status, 400);
 
   const history = await (await fetch(api + '/history?period=7d', { headers })).json();
   assert.equal(history.results.length, 1);
-  assert.equal(history.results[0].mood, 'HAPPY');
+  assert.equal(history.results[0].mood, 'CALM');
   assert.equal(history.results[0].recommendations[0].tmdb_id, 354912);
   assert.equal((await (await fetch(api + '/history?year=' + today.slice(0, 4), { headers })).json()).results.length, 1);
   assert.deepEqual(await (await fetch(api + '/history', { headers: bobHeaders })).json(), { results: [] });
@@ -149,14 +147,30 @@ test('Emociones: consentimiento, detección, historial y recomendaciones guardad
     assert.equal((await fetch(api + '/history' + query, { headers })).status, 400, query);
   }
 
-  // Revocar el consentimiento bloquea nuevas detecciones.
-  assert.equal((await fetch(api + '/consent', { method: 'DELETE', headers })).status, 204);
-  assert.equal((await detect({ image: JPEG })).status, 403);
+  // Resumen del tablero agregado en el backend.
+  const summary = await (await fetch(api + '/summary?period=7d', { headers })).json();
+  assert.equal(summary.period, '7d');
+  assert.equal(summary.total_records, 1);
+  assert.deepEqual(summary.predominant, { mood: 'CALM', name: 'Neutralidad / calma', count: 1 });
+  assert.equal(summary.distribution.length, 7, 'incluye las 7 emociones, también las que no aparecen');
+  assert.equal(summary.timeline.length, 7);
+  assert.equal(summary.timeline.find(point => point.bucket === today).counts.CALM, 1);
+  assert.equal(summary.recommendations.total, 1);
+  assert.deepEqual(summary.recommendations.by_media_type, { movie: 1, tv: 0 });
+  assert.deepEqual(summary.recommendations.by_genre, [{ genre_id: 16, count: 1 }, { genre_id: 10751, count: 1 }]);
+  assert.equal(summary.recommendations.recent[0].mood, 'CALM');
+  const yearly = await (await fetch(api + '/summary?period=year', { headers })).json();
+  assert.equal(yearly.timeline.length, 12);
+  assert.equal(yearly.timeline.find(point => point.bucket === today.slice(0, 7)).counts.CALM, 1);
+  const empty = await (await fetch(api + '/summary', { headers: bobHeaders })).json();
+  assert.equal(empty.period, '30d');
+  assert.equal(empty.predominant, null);
+  assert.equal(empty.recommendations.total, 0);
+  for (const query of ['?period=1y', '?year=2026']) assert.equal((await fetch(api + '/summary' + query, { headers })).status, 400, query);
 
-  // Sin detector configurado (sin AWS_REGION) la detección responde 503.
-  const unconfigured = await listen(t, library(watchlist, auth, undefined, undefined, { emotions: { store } }));
-  const direct = await fetch(unconfigured + '/api/v1/emotions/detections', { method: 'POST', headers, body: JSON.stringify({ image: JPEG }) });
-  assert.equal(direct.status, 503);
+  // Revocar el consentimiento bloquea nuevos registros.
+  assert.equal((await fetch(api + '/consent', { method: 'DELETE', headers })).status, 204);
+  assert.equal((await confirm({ mood: 'HAPPY' })).status, 403);
 });
 
 test('Rekognition: conversión de emociones al catálogo', () => {
@@ -170,7 +184,7 @@ test('Rekognition: conversión de emociones al catálogo', () => {
 
 test('Emociones Prisma: reemplazo diario y consultas por usuario', async () => {
   const calls = [];
-  const row = { id: 'h1', detectionDate: new Date('2026-11-10T00:00:00Z'), detectedAt: new Date('2026-11-10T15:00:00Z'), primaryMoodCode: 'SAD',
+  const row = { id: 'h1', detectionDate: new Date('2026-11-10T00:00:00Z'), detectedAt: new Date('2026-11-10T15:00:00Z'), primaryMoodCode: 'SAD', source: 'AWS_REKOGNITION',
     scores: [{ moodCode: 'CALM', confidence: '6.1' }, { moodCode: 'SAD', confidence: '91.2' }], savedRecommendations: [] };
   let existing = { id: 'h1' };
   const tx = {
@@ -190,7 +204,7 @@ test('Emociones Prisma: reemplazo diario y consultas por usuario', async () => {
   const store = emotionStore({ ...tx, $transaction: fn => fn(tx) });
   const scores = [{ mood: 'SAD', confidence: 91.2 }, { mood: 'CALM', confidence: 6.1 }];
   const date = new Date('2026-11-10T00:00:00Z');
-  const result = await store.record(alice, { date, detectedAt: row.detectedAt, scores });
+  const result = await store.record(alice, { date, detectedAt: row.detectedAt, mood: 'SAD', scores, source: 'AWS_REKOGNITION' });
   assert.equal(result.replaced, true);
   assert.deepEqual(result.entry.scores, scores, 'puntajes ordenados de mayor a menor');
   assert.equal(result.entry.confidence, 91.2);
@@ -200,7 +214,7 @@ test('Emociones Prisma: reemplazo diario y consultas por usuario', async () => {
 
   calls.length = 0;
   existing = null;
-  assert.equal((await store.record(alice, { date, detectedAt: row.detectedAt, scores })).replaced, false);
+  assert.equal((await store.record(alice, { date, detectedAt: row.detectedAt, mood: 'SAD', scores, source: 'AWS_REKOGNITION' })).replaced, false);
   assert.deepEqual(calls.map(([op]) => op), ['find', 'create', 'scores', 'reload']);
   assert.equal(calls[1][1].data.profileId, alice);
 

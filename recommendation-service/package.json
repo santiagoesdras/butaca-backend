@@ -5,6 +5,7 @@
   "dependencies": {
     "express": "^5.1.0",
     "jose": "^6.2.0",
-    "lru-cache": "^11.2.0"
+    "lru-cache": "^11.2.0",
+    "zod": "^4.6.7"
   }
 }

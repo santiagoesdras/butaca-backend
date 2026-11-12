@@ -6,12 +6,6 @@ export class HttpFailure extends Error {
   }
 }
 
-export function positiveInt(name: string, fallback: number): number {
-  const value = Number(process.env[name] ?? fallback);
-  if (!Number.isSafeInteger(value) || value < 1) throw new Error('Configuración inválida: ' + name);
-  return value;
-}
-
 export function service(name: string) {
   const app = express();
   app.disable('x-powered-by');
