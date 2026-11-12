@@ -173,7 +173,8 @@ Respuesta `201` (primer registro del día) o `200` (reemplaza el registro de ese
         {
           "tmdb_id": 354912, "media_type": "movie", "title": "Coco", "poster_path": "/coco.jpg",
           "overview": null, "release_date": "2017-10-27", "vote_average": 8.2, "genre_ids": [16, 10751],
-          "saved_at": "2026-11-10T21:16:00.000Z"
+          "saved_at": "2026-11-10T21:16:00.000Z",
+          "mood": "SAD", "mood_name": "Tristeza", "mood_detected_at": "2026-11-10T21:15:04.120Z"
         }
       ]
     }
@@ -182,6 +183,8 @@ Respuesta `201` (primer registro del día) o `200` (reemplaza el registro de ese
 ```
 
 Los días sin registro no aparecen.
+
+Cada recomendación guardada trae **su propia emoción** (`mood`, `mood_name`, `mood_detected_at`): la que tenía el día en el momento de guardarla (columna `mood_code_at_save`). Si el usuario vuelve a analizarse el mismo día, cambia la emoción del día (`mood` del registro), pero las recomendaciones anteriores conservan la suya. El frontend debe mostrar la emoción de la recomendación, no la del día.
 
 ## Resumen para el tablero
 
@@ -218,7 +221,8 @@ Agrega el historial en el backend para que el tablero no tenga que calcularlo:
 - `predominant` es `null` si no hay registros en el período.
 - `timeline` tiene un punto por día en `7d`/`30d` y uno por mes (`YYYY-MM`) en `year`, incluidos los vacíos, para graficar sin huecos.
 - `by_genre` lista los 10 géneros más recomendados; sus nombres se obtienen de `GET /api/v1/media/genres`.
-- `recent` trae las últimas 5 recomendaciones guardadas, con la emoción del día en que se guardaron.
+- `recent` trae las últimas 5 recomendaciones guardadas, cada una con su propia emoción.
+- `by_mood` cuenta las recomendaciones por la emoción con la que se hizo cada una.
 
 ## Recomendación guardada
 

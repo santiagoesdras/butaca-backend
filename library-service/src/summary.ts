@@ -34,8 +34,9 @@ export function summarize(entries: HistoryEntry[], period: SummaryPeriod, from: 
     if (bucket) bucket[entry.mood] += 1;
   }
 
-  const saved: (SavedRecommendation & { mood: MoodCode; mood_name: string; date: string })[] =
-    entries.flatMap(entry => entry.recommendations.map(rec => ({ ...rec, mood: entry.mood, mood_name: entry.name, date: entry.date })));
+  // Cada recomendación cuenta con SU emoción (la del momento en que se guardó), no con la emoción final del día.
+  const saved: (SavedRecommendation & { date: string })[] =
+    entries.flatMap(entry => entry.recommendations.map(rec => ({ ...rec, date: entry.date })));
   const byMood = emptyCounts();
   const byGenre = new Map<number, number>();
   const byType = { movie: 0, tv: 0 };

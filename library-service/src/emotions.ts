@@ -14,8 +14,14 @@ export type Consent = { granted: boolean; policy_version: string | null; granted
 export type SavedRecommendation = {
   tmdb_id: number; media_type: ApiMediaType; title: string; poster_path: string | null; overview: string | null;
   release_date: string | null; vote_average: number | null; genre_ids: number[]; saved_at: string;
+  /**
+   * Emoción con la que se hizo ESTA recomendación (columna mood_code_at_save). Puede diferir de la emoción
+   * del día: si el usuario vuelve a analizarse el mismo día, el registro del día cambia, pero cada
+   * recomendación conserva la emoción que tenía cuando se guardó.
+   */
+  mood: MoodCode; mood_name: string; mood_detected_at: string;
 };
-export type RecommendationInput = Omit<SavedRecommendation, 'tmdb_id' | 'media_type' | 'saved_at'>;
+export type RecommendationInput = Omit<SavedRecommendation, 'tmdb_id' | 'media_type' | 'saved_at' | 'mood' | 'mood_name' | 'mood_detected_at'>;
 
 export type HistoryEntry = {
   id: string;
@@ -79,11 +85,14 @@ type Db = Pick<PrismaClient, 'cameraConsent' | 'profile' | 'moodHistory' | 'mood
 type SavedRow = {
   tmdbId: number; mediaType: Parameters<typeof toApiMediaType>[0]; title: string; posterPath: string | null; overview: string | null;
   releaseDate: string | null; voteAverage: { toString(): string } | null; genreIds: number[]; savedAt: Date;
+  moodCodeAtSave: string; moodDetectedAt: Date;
 };
 const saved = (row: SavedRow): SavedRecommendation => ({
   tmdb_id: row.tmdbId, media_type: toApiMediaType(row.mediaType), title: row.title, poster_path: row.posterPath,
   overview: row.overview, release_date: row.releaseDate, vote_average: row.voteAverage === null ? null : Number(row.voteAverage),
-  genre_ids: row.genreIds, saved_at: row.savedAt.toISOString()
+  genre_ids: row.genreIds, saved_at: row.savedAt.toISOString(),
+  mood: row.moodCodeAtSave as MoodCode, mood_name: NAMES.get(row.moodCodeAtSave) ?? row.moodCodeAtSave,
+  mood_detected_at: row.moodDetectedAt.toISOString()
 });
 
 type HistoryRow = {
@@ -165,13 +174,13 @@ export function emotionStore(db: Db): EmotionStore {
           title: input.title, posterPath: input.poster_path, overview: input.overview, releaseDate: input.release_date,
           voteAverage: input.vote_average, genreIds: input.genre_ids
         };
+        // La emoción vigente del día en este momento queda fija en la recomendación. Si el mismo título se
+        // vuelve a recomendar el mismo día con otra emoción, se actualiza a la nueva (es una recomendación nueva).
+        const mood = { moodCodeAtSave: history.primaryMoodCode, moodDetectedAt: history.detectedAt };
         const row = await tx.savedRecommendation.upsert({
           where: { moodHistoryId_tmdbId_mediaType: { moodHistoryId: historyId, tmdbId: ref.tmdb_id, mediaType } },
-          create: {
-            ...values, profileId, moodHistoryId: historyId, tmdbId: ref.tmdb_id, mediaType,
-            moodCodeAtSave: history.primaryMoodCode, moodDetectedAt: history.detectedAt
-          },
-          update: values
+          create: { ...values, ...mood, profileId, moodHistoryId: historyId, tmdbId: ref.tmdb_id, mediaType },
+          update: { ...values, ...mood, savedAt: new Date() }
         });
         return saved(row);
       });

@@ -40,7 +40,7 @@ function memoryStore() {
     async saveRecommendation(user, id, ref, input) {
       const row = [...days.values()].find(item => item.id === id && item.user === user);
       if (!row) throw new HttpFailure(404, 'Registro de emoción no encontrado');
-      const item = { ...ref, ...input, saved_at: new Date().toISOString() };
+      const item = { ...ref, ...input, saved_at: new Date().toISOString(), mood: row.mood, mood_name: row.name, mood_detected_at: row.detected_at };
       if (!saved.has(id)) saved.set(id, new Map());
       saved.get(id).set(ref.media_type + ':' + ref.tmdb_id, item);
       return item;
@@ -112,6 +112,12 @@ test('Emociones: consentimiento, emoción confirmada, historial, resumen y recom
   assert.equal(first.date, today);
   assert.deepEqual(profiles.ensured.at(-1), alice, 'POST asegura el perfil');
 
+  // Recomendación guardada mientras la emoción del día era Tristeza.
+  const sadRec = await fetch(`${api}/history/${first.id}/recommendations/movie/438631`, { method: 'PUT', headers,
+    body: JSON.stringify({ title: 'Duna', genre_ids: [878] }) });
+  assert.equal(sadRec.status, 200);
+  assert.equal((await sadRec.json()).mood, 'SAD');
+
   // Confirmar otra emoción el mismo día reemplaza el registro (uno por usuario y día). Sin confianza = elegida.
   const second = await confirm({ mood: 'CALM' });
   assert.equal(second.status, 200);
@@ -139,8 +145,10 @@ test('Emociones: consentimiento, emoción confirmada, historial, resumen y recom
 
   const history = await (await fetch(api + '/history?period=7d', { headers })).json();
   assert.equal(history.results.length, 1);
-  assert.equal(history.results[0].mood, 'CALM');
-  assert.equal(history.results[0].recommendations[0].tmdb_id, 354912);
+  assert.equal(history.results[0].mood, 'CALM', 'el día queda con la última emoción confirmada');
+  // Pero cada recomendación conserva la emoción con la que se hizo.
+  assert.deepEqual(history.results[0].recommendations.map(rec => [rec.title, rec.mood, rec.mood_name]),
+    [['Duna', 'SAD', 'Tristeza'], ['Coco', 'CALM', 'Neutralidad / calma']]);
   assert.equal((await (await fetch(api + '/history?year=' + today.slice(0, 4), { headers })).json()).results.length, 1);
   assert.deepEqual(await (await fetch(api + '/history', { headers: bobHeaders })).json(), { results: [] });
   for (const query of ['?period=1y', '?year=99', '?period=7d&year=2026', '?user_id=x']) {
@@ -155,10 +163,14 @@ test('Emociones: consentimiento, emoción confirmada, historial, resumen y recom
   assert.equal(summary.distribution.length, 7, 'incluye las 7 emociones, también las que no aparecen');
   assert.equal(summary.timeline.length, 7);
   assert.equal(summary.timeline.find(point => point.bucket === today).counts.CALM, 1);
-  assert.equal(summary.recommendations.total, 1);
-  assert.deepEqual(summary.recommendations.by_media_type, { movie: 1, tv: 0 });
-  assert.deepEqual(summary.recommendations.by_genre, [{ genre_id: 16, count: 1 }, { genre_id: 10751, count: 1 }]);
-  assert.equal(summary.recommendations.recent[0].mood, 'CALM');
+  assert.equal(summary.recommendations.total, 2);
+  assert.deepEqual(summary.recommendations.by_media_type, { movie: 2, tv: 0 });
+  assert.deepEqual(summary.recommendations.by_genre, [{ genre_id: 16, count: 1 }, { genre_id: 878, count: 1 }, { genre_id: 10751, count: 1 }]);
+  // Por emoción se cuenta la de cada recomendación, no la final del día.
+  const byMood = Object.fromEntries(summary.recommendations.by_mood.map(item => [item.mood, item.count]));
+  assert.equal(byMood.SAD, 1);
+  assert.equal(byMood.CALM, 1);
+  assert.deepEqual(summary.recommendations.recent.map(rec => rec.mood).sort(), ['CALM', 'SAD']);
   const yearly = await (await fetch(api + '/summary?period=year', { headers })).json();
   assert.equal(yearly.timeline.length, 12);
   assert.equal(yearly.timeline.find(point => point.bucket === today.slice(0, 7)).counts.CALM, 1);
@@ -185,7 +197,9 @@ test('Rekognition: conversión de emociones al catálogo', () => {
 test('Emociones Prisma: reemplazo diario y consultas por usuario', async () => {
   const calls = [];
   const row = { id: 'h1', detectionDate: new Date('2026-11-10T00:00:00Z'), detectedAt: new Date('2026-11-10T15:00:00Z'), primaryMoodCode: 'SAD', source: 'AWS_REKOGNITION',
-    scores: [{ moodCode: 'CALM', confidence: '6.1' }, { moodCode: 'SAD', confidence: '91.2' }], savedRecommendations: [] };
+    scores: [{ moodCode: 'CALM', confidence: '6.1' }, { moodCode: 'SAD', confidence: '91.2' }],
+    savedRecommendations: [{ tmdbId: 7, mediaType: 'MOVIE', title: 'X', posterPath: null, overview: null, releaseDate: null, voteAverage: null,
+      genreIds: [], savedAt: new Date('2026-11-10T15:05:00Z'), moodCodeAtSave: 'FEAR', moodDetectedAt: new Date('2026-11-10T14:00:00Z') }] };
   let existing = { id: 'h1' };
   const tx = {
     moodHistory: {
@@ -220,6 +234,8 @@ test('Emociones Prisma: reemplazo diario y consultas por usuario', async () => {
 
   const history = await store.history(alice, date, date);
   assert.equal(history[0].date, '2026-11-10');
+  assert.equal(history[0].recommendations[0].mood, 'FEAR', 'la recomendación conserva su emoción aunque el día sea SAD');
+  assert.equal(history[0].recommendations[0].mood_name, 'Miedo');
   assert.equal(calls.at(-1)[1].where.profileId, alice);
   await assert.rejects(store.saveRecommendation(bob, 'h1', { tmdb_id: 1, media_type: 'movie' }, { title: 'x', poster_path: null,
     overview: null, release_date: null, vote_average: null, genre_ids: [] }), { status: 404 });
