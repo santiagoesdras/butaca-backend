@@ -53,6 +53,15 @@ En Windows PowerShell usa `curl.exe`. Los cuatro servicios de Compose deben apar
 
 Compose publica el Gateway en el loopback del host. Media Service escucha en el puerto 3001 dentro de la red de Compose y necesita salida HTTPS hacia TMDB. Cada contenedor tiene un límite inicial de 192 MiB. Los healthchecks consultan `/health/live` y comprueban el proceso independientemente de TMDB. Para detener este proyecto, ejecuta `docker compose down` desde su raíz.
 
+## Integración continua
+
+GitHub Actions (`.github/workflows/ci.yml`) se ejecuta en cada push a cualquier rama y en cada pull request:
+
+1. **Pruebas:** instala dependencias, genera el cliente de Prisma (sin conectarse a una base) y ejecuta `npm test`, que compila en modo estricto y corre las pruebas unitarias y de integración con TMDB, Supabase, Library y AWS simulados. No necesita secretos.
+2. **Imágenes Docker:** si las pruebas pasan, construye las imágenes de los cuatro servicios para comprobar que el `Dockerfile` sigue funcionando.
+
+`validate-main-source.yml` y `validate-branch-main.yml` siguen exigiendo que los pull requests hacia `main` provengan de `dev`.
+
 ## Verificar sin consultar la base de datos
 
 ```sh

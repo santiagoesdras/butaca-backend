@@ -1,0 +1,57 @@
+name: CI
+
+# Corre las pruebas en cada push (cualquier rama) y en cada pull request.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+# Un push nuevo a la misma rama cancela la ejecución anterior.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Pruebas (unitarias e integración)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci --ignore-scripts
+
+      # El cliente de Prisma se genera desde el esquema; no se conecta a ninguna base.
+      - name: Generar cliente de Prisma
+        env:
+          DIRECT_URL: postgresql://unused:unused@127.0.0.1:5432/unused
+        run: npx --no-install prisma generate --config ./library-service/prisma.config.ts
+
+      # Compila en modo estricto y ejecuta las pruebas con TMDB, Supabase, Library y AWS simulados.
+      # La prueba contra PostgreSQL real se omite sin LIBRARY_TEST_DATABASE_URL.
+      - name: Ejecutar pruebas
+        run: npm test
+
+  docker:
+    name: Imagen Docker (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api-gateway, media-service, library-service, recommendation-service]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir imagen
+        run: docker build --build-arg SERVICE=${{ matrix.service }} -t butaca/${{ matrix.service }}:ci .
