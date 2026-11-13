@@ -1,7 +1,10 @@
 import express, { type ErrorRequestHandler } from 'express';
 import { authenticator, type AuthConfig } from '../../shared/auth.js';
-import { finish, HttpFailure, positiveInt, service } from '../../shared/http.js';
-import { only } from '../../shared/params.js';
+import { bindHost, httpUrl, loadConfig, optionalText, positiveInteger, postgresUrl, textWithDefault } from '../../shared/config.js';
+import { finish, HttpFailure, service } from '../../shared/http.js';
+import { mediaTypeSchema, only, tmdbIdText } from '../../shared/params.js';
+import { parse } from '../../shared/validate.js';
+import { z } from 'zod';
 import type { MediaRef, WatchlistStore } from './watchlist.js';
 import { progressInput, type EpisodeRef, type ProgressStore } from './progress.js';
 import type { FavoriteStore } from './favorites.js';
@@ -16,14 +19,19 @@ const base = '/api/v1/library';
 const privateBases = [base, emotionsBase];
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function reference(params: Record<string, unknown>): MediaRef {
-  const { media_type, tmdb_id } = params;
-  if (media_type !== 'movie' && media_type !== 'tv') throw new HttpFailure(400, 'media_type debe ser movie o tv');
-  if (typeof tmdb_id !== 'string' || !/^[1-9]\d{0,9}$/.test(tmdb_id) || Number(tmdb_id) > 2147483647) {
-    throw new HttpFailure(400, 'tmdb_id debe ser un entero entre 1 y 2147483647');
-  }
-  return { media_type, tmdb_id: Number(tmdb_id) };
-}
+const referenceSchema = z.object({
+  media_type: mediaTypeSchema,
+  tmdb_id: tmdbIdText('tmdb_id debe ser un entero entre 1 y 2147483647')
+});
+const reference = (params: Record<string, unknown>): MediaRef => parse(referenceSchema, params);
+
+const episodeNumber = (minimum: number) => z.string({ error: 'Temporada o episodio inválidos' })
+  .regex(/^(0|[1-9]\d{0,9})$/, 'Temporada o episodio inválidos').transform(Number)
+  .refine(value => value >= minimum && value <= 2147483647, 'Temporada o episodio inválidos');
+const episodeSchema = z.object({ season: episodeNumber(0), episode: episodeNumber(1) });
+
+// Sin cuerpo, o un objeto JSON vacío: nunca se aceptan campos (por ejemplo, un user_id inyectado).
+const emptyBodySchema = z.union([z.undefined(), z.object({}).strict()], { error: 'Esta operación no admite campos en el cuerpo' });
 
 export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseUrl' | 'audience'>, progress?: ProgressStore,
   favorites?: FavoriteStore, { profiles, emotions }: LibraryExtras = {}) {
@@ -55,10 +63,7 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
     next();
   });
   const emptyBody: express.RequestHandler = (req, _res, next) => {
-    if (req.body !== undefined && (req.body === null || Array.isArray(req.body) ||
-      typeof req.body !== 'object' || Object.keys(req.body).length > 0)) {
-      throw new HttpFailure(400, 'Esta operación no admite campos en el cuerpo');
-    }
+    parse(emptyBodySchema, req.body);
     next();
   };
 
@@ -87,15 +92,7 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
   }
 
   if (progress) {
-    const episodeRef = (params: Record<string, unknown>): EpisodeRef => {
-      const number = (value: unknown, minimum: number) => {
-        if (typeof value !== 'string' || !/^(0|[1-9]\d{0,9})$/.test(value) || Number(value) < minimum || Number(value) > 2147483647) {
-          throw new HttpFailure(400, 'Temporada o episodio inválidos');
-        }
-        return Number(value);
-      };
-      return { season: number(params.season, 0), episode: number(params.episode, 1) };
-    };
+    const episodeRef = (params: Record<string, unknown>): EpisodeRef => parse(episodeSchema, params);
     const seriesRef = (params: Record<string, unknown>): MediaRef => reference({ ...params, media_type: 'tv' });
     app.get(base + '/progress', emptyBody, async (_req, res) => res.json({ results: await progress.list(res.locals.user.id) }));
     app.put(base + '/progress/:media_type/:tmdb_id', async (req, res) => {
@@ -131,8 +128,18 @@ export function library(store: WatchlistStore, auth: Pick<AuthConfig, 'supabaseU
 }
 
 if (import.meta.main) {
-  const supabaseUrl = process.env.SUPABASE_URL;
-  if (!supabaseUrl || !process.env.DATABASE_URL) throw new Error('Se requieren SUPABASE_URL y DATABASE_URL');
+  const config = loadConfig({
+    SUPABASE_URL: httpUrl(),
+    SUPABASE_JWT_AUDIENCE: textWithDefault('authenticated'),
+    DATABASE_URL: postgresUrl,
+    // Sin AWS_REGION el análisis responde 503; las demás rutas siguen disponibles.
+    AWS_REGION: optionalText,
+    EMOTION_MIN_CONFIDENCE: positiveInteger(30, 100),
+    EMOTION_AWS_TIMEOUT_MS: positiveInteger(5000),
+    EMOTION_ANALYZE_LIMIT: positiveInteger(10),
+    EMOTION_ANALYZE_WINDOW_MS: positiveInteger(60000),
+    BIND_HOST: bindHost
+  });
   // La salud del proceso no depende de una consulta a la base de datos.
   const { prisma } = await import('./db.js');
   const { watchlistStore } = await import('./watchlist.js');
@@ -141,24 +148,20 @@ if (import.meta.main) {
   const { profilesStore } = await import('./profiles.js');
   const { emotionStore } = await import('./emotions.js');
   const { rekognitionDetector } = await import('./detector.js');
-  // Sin AWS_REGION el análisis responde 503; las demás rutas siguen disponibles.
-  const region = process.env.AWS_REGION;
-  const minConfidence = positiveInt('EMOTION_MIN_CONFIDENCE', 30);
-  if (minConfidence > 100) throw new Error('Configuración inválida: EMOTION_MIN_CONFIDENCE');
   library(watchlistStore(prisma), {
-    supabaseUrl, audience: process.env.SUPABASE_JWT_AUDIENCE || 'authenticated'
+    supabaseUrl: config.SUPABASE_URL, audience: config.SUPABASE_JWT_AUDIENCE
   }, progressStore(prisma), favoritesStore(prisma), {
     profiles: profilesStore(prisma),
     emotions: {
       store: emotionStore(prisma),
-      detector: region ? rekognitionDetector(region, positiveInt('EMOTION_AWS_TIMEOUT_MS', 5000)) : undefined,
+      detector: config.AWS_REGION ? rekognitionDetector(config.AWS_REGION, config.EMOTION_AWS_TIMEOUT_MS) : undefined,
       analyze: {
-        minConfidence,
-        limit: positiveInt('EMOTION_ANALYZE_LIMIT', 10),
-        windowMs: positiveInt('EMOTION_ANALYZE_WINDOW_MS', 60000)
+        minConfidence: config.EMOTION_MIN_CONFIDENCE,
+        limit: config.EMOTION_ANALYZE_LIMIT,
+        windowMs: config.EMOTION_ANALYZE_WINDOW_MS
       }
     }
-  }).listen(3002, process.env.BIND_HOST ?? '127.0.0.1', () => {
+  }).listen(3002, config.BIND_HOST, () => {
     console.log(JSON.stringify({ service: 'library-service', event: 'listening', port: 3002 }));
   });
 }

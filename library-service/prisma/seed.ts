@@ -1,8 +1,10 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../generated/prisma/client.js";
 import { DEFAULT_MOODS } from "../src/constants/moods.js";
+import { loadConfig, optionalText, postgresUrl } from "../../shared/config.js";
 
-const connectionString = process.env.DATABASE_URL || process.env.DIRECT_URL || "";
+const env = loadConfig({ DATABASE_URL: optionalText, DIRECT_URL: optionalText });
+const connectionString = loadConfig({ URL: postgresUrl }, { URL: env.DATABASE_URL ?? env.DIRECT_URL }).URL;
 const adapter = new PrismaPg({ connectionString });
 const prisma = new PrismaClient({ adapter });
 

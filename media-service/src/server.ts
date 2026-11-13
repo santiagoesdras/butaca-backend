@@ -1,4 +1,5 @@
-import { finish, positiveInt, service } from '../../shared/http.js';
+import { bindHost, envInteger, loadConfig, positiveInteger, requiredText } from '../../shared/config.js';
+import { finish, service } from '../../shared/http.js';
 import { choice, language, mediaRef, only, page, searchText, type MediaType } from '../../shared/params.js';
 import { cached, client, details, genreList, paged } from './tmdb.js';
 
@@ -7,8 +8,8 @@ const GENRES_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function media(token: string, origin = 'https://api.themoviedb.org', timeout = 4500) {
   if (!token.trim()) throw new Error('Se requiere TMDB_READ_ACCESS_TOKEN');
-  const ttl = positiveInt('CACHE_TTL_MS', 300000);
-  const max = positiveInt('CACHE_MAX_ENTRIES', 64);
+  const ttl = envInteger('CACHE_TTL_MS', 300000);
+  const max = envInteger('CACHE_MAX_ENTRIES', 64);
   const tmdb = client(token, origin, timeout);
 
   const trending = cached(ttl, max, async (lang: string) => {
@@ -111,5 +112,11 @@ export function media(token: string, origin = 'https://api.themoviedb.org', time
 }
 
 if (import.meta.main) {
-  media(process.env.TMDB_READ_ACCESS_TOKEN ?? '').listen(3001, process.env.BIND_HOST ?? '127.0.0.1');
+  const config = loadConfig({
+    TMDB_READ_ACCESS_TOKEN: requiredText,
+    CACHE_TTL_MS: positiveInteger(300000),
+    CACHE_MAX_ENTRIES: positiveInteger(64),
+    BIND_HOST: bindHost
+  });
+  media(config.TMDB_READ_ACCESS_TOKEN).listen(3001, config.BIND_HOST);
 }

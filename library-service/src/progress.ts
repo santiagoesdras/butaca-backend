@@ -1,5 +1,7 @@
 import type { Prisma, PrismaClient, ProgressStatus } from '../generated/prisma/client.js';
+import { z } from 'zod';
 import { HttpFailure } from '../../shared/http.js';
+import { parse } from '../../shared/validate.js';
 import { toApiMediaType, toApiProgressStatus, toPrismaMediaType, toPrismaProgressStatus, type ApiProgressStatus } from './dtos/media.dto.js';
 import type { MediaRef } from './watchlist.js';
 
@@ -16,26 +18,27 @@ export interface ProgressStore {
   removeEpisode(user: string, ref: MediaRef, episode: EpisodeRef): Promise<void>;
 }
 
+const seconds = (key: string, min: number) => z.number({ error: `${key} debe ser un entero entre ${min} y 2147483647, o null` })
+  .int(`${key} debe ser un entero entre ${min} y 2147483647, o null`)
+  .min(min, `${key} debe ser un entero entre ${min} y 2147483647, o null`)
+  .max(2147483647, `${key} debe ser un entero entre ${min} y 2147483647, o null`)
+  .nullish().transform(value => value ?? null);
+
+const progressSchema = z.strictObject({
+  status: z.enum(['in_progress', 'completed', 'on_hold', 'dropped'], { error: 'Estado de progreso inválido' }),
+  position_seconds: seconds('position_seconds', 0),
+  duration_seconds: seconds('duration_seconds', 1)
+}, { error: issue => issue.code === 'unrecognized_keys' ? 'Campos de progreso no admitidos' : 'Se requiere un objeto JSON de progreso' });
+
 export function progressInput(body: unknown, ref: MediaRef): ProgressInput {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw new HttpFailure(400, 'Se requiere un objeto JSON de progreso');
-  const values = body as Record<string, unknown>;
-  if (Object.keys(values).some(key => !['status', 'position_seconds', 'duration_seconds'].includes(key))) {
-    throw new HttpFailure(400, 'Campos de progreso no admitidos');
+  const input: ProgressInput = parse(progressSchema, body);
+  if (ref.media_type === 'tv' && (input.position_seconds !== null || input.duration_seconds !== null)) {
+    throw new HttpFailure(400, 'En series el avance se registra por episodios');
   }
-  if (typeof values.status !== 'string' || !['in_progress', 'completed', 'on_hold', 'dropped'].includes(values.status)) throw new HttpFailure(400, 'Estado de progreso inválido');
-  const integer = (key: string, min: number) => {
-    const value = values[key];
-    if (value === undefined || value === null) return null;
-    if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > 2147483647) {
-      throw new HttpFailure(400, `${key} debe ser un entero entre ${min} y 2147483647, o null`);
-    }
-    return value;
-  };
-  const position = integer('position_seconds', 0);
-  const duration = integer('duration_seconds', 1);
-  if (ref.media_type === 'tv' && (position !== null || duration !== null)) throw new HttpFailure(400, 'En series el avance se registra por episodios');
-  if (position !== null && duration !== null && position > duration) throw new HttpFailure(400, 'La posición no puede superar la duración');
-  return { status: values.status as ApiProgressStatus, position_seconds: position, duration_seconds: duration };
+  if (input.position_seconds !== null && input.duration_seconds !== null && input.position_seconds > input.duration_seconds) {
+    throw new HttpFailure(400, 'La posición no puede superar la duración');
+  }
+  return input;
 }
 
 function serialize(item: Row) {

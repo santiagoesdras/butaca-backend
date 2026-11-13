@@ -12,9 +12,10 @@ Esta copia incorpora watchlist, progreso y su integración con el Gateway. Los c
 | Progreso | GET `/api/v1/library/progress`, PUT `/api/v1/library/progress/:media_type/:tmdb_id` y PUT/DELETE de episodios. JWT requerido. Cambios locales de esta entrega. |
 | Recomendaciones | Implementado. Consume favoritos, watchlist y progreso de Library con el token del usuario. No consume emociones. |
 | Análisis de cámara con AWS Rekognition | `POST /api/v1/emotions/analyze`: multipart con `image` y `consent=true`, máximo 2 MiB, sin persistencia y con confirmación requerida. Contrato en [`docs/contrato-emociones.md`](docs/contrato-emociones.md). |
-| Historial emocional | `GET /api/v1/emotions/history?period=7d|30d` o `?year=YYYY`, con las recomendaciones guardadas de cada día (`PUT /api/v1/emotions/history/:id/recommendations/:media_type/:tmdb_id`). |
+| Registro e historial emocional | `POST /api/v1/emotions/history` guarda la emoción confirmada (sin imagen). `GET /api/v1/emotions/history?period=7d`, `30d` o `year=YYYY` devuelve los días con sus recomendaciones guardadas (`PUT /api/v1/emotions/history/:id/recommendations/:media_type/:tmdb_id`). |
+| Tablero | `GET /api/v1/emotions/summary?period=7d`, `30d` o `year`: distribución, emoción predominante, evolución y contenido recomendado (por emoción, género y tipo), ya agregados. |
 
-El esquema permite una detección por usuario y día: una nueva detección el mismo día reemplaza la anterior. La zona horaria la envía el frontend (`time_zone`) y los códigos de emociones son los del catálogo `library.moods`. Las decisiones que el equipo aún debe confirmar están al final de [`docs/contrato-emociones.md`](docs/contrato-emociones.md).
+La imagen solo pasa por `/analyze`; lo que se guarda es la emoción que el usuario confirma. Hay un registro por usuario y día local: confirmar otra emoción ese día lo reemplaza. La zona horaria la envía el frontend (`time_zone`) y los códigos de emociones son los siete del catálogo `library.moods`. Las decisiones y sus motivos están al final de [`docs/contrato-emociones.md`](docs/contrato-emociones.md).
 
 El frontend inicia sesión mediante Supabase Auth y envía el access token en `Authorization: Bearer <token>`. No usar API keys como token de usuario. Los proveedores OAuth se habilitan en Supabase, no mediante el Gateway. Las operaciones privadas determinan el usuario a partir del JWT; nunca desde `profile_id` o `user_id` enviados por el cliente.
 
@@ -27,6 +28,8 @@ El API Gateway recibe las consultas del cliente en el puerto 8080. Media Service
 ## Ejecutar con Docker Compose
 
 Desde la raíz del repositorio, crea una copia local de `.env.example` llamada `.env`. En PowerShell puedes usar `Copy-Item .env.example .env` si todavía no tienes un archivo `.env`.
+
+Cada servicio valida sus variables con **Zod** al arrancar (`shared/config.ts`): si falta una obligatoria o tiene un formato inválido (por ejemplo, una URL o un número fuera de rango), el servicio no inicia y muestra qué variable revisar, sin imprimir su valor. Las cadenas vacías que deja Compose con `${VAR:-}` se tratan como ausentes. Las entradas de las peticiones (parámetros, cuerpos y rutas) también se validan con esquemas de Zod (`shared/validate.ts`).
 
 | Variable | Uso |
 | --- | --- |
